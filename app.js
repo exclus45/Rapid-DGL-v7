@@ -3,6 +3,8 @@
 appEl.innerHTML = `
   <div class="tabs">
     <button class="tab-btn active" data-tab="import">Импорт</button>
+    <button class="tab-btn" data-tab="check">Проверка комплекта</button>
+    <button class="tab-btn" data-tab="labels">Этикетки</button>
     <button class="tab-btn" data-tab="optimize">Оптимизация</button>
     <button class="tab-btn" data-tab="export">Экспорт</button>
   </div>
@@ -11,12 +13,17 @@ appEl.innerHTML = `
     <div class="card">
       <div class="row center-row">
         <input id="csvInput" type="file" accept=".csv,.txt" multiple />
+        <input id="pdfInput" type="file" accept=".pdf" multiple />
         <label class="import-btn" for="csvInput">Импорт</label>
+        <label class="btn-secondary" for="pdfInput">PDF для этикеток</label>
         <button id="clearBtn" type="button" class="btn-secondary">Очистить</button>
         <button id="printImportBtn" type="button" class="btn-secondary">Печать</button>
       </div>
-      <div id="dropZone">Перетащите файлы сюда или выберите через кнопку выше</div>
+      <div id="dropZone">Перетащите CSV/TXT и PDF сюда или выберите через кнопки выше</div>
+      <div class="file-list-title">Файлы раскроя</div>
       <div id="fileList"></div>
+      <div class="file-list-title">PDF для этикеток</div>
+      <div id="pdfFileList"></div>
     </div>
 
     <div class="card">
@@ -24,6 +31,27 @@ appEl.innerHTML = `
       <div id="tableWrap" class="import-print-area"></div>
     </div>
   </div>
+
+  <div class="tab-panel" id="tab-check">
+    <div class="card">
+      <h2 class="center-heading">Проверка комплекта задания</h2>
+      <div id="labelSummary" class="label-summary"></div>
+      <div id="labelReview"></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-labels">
+    <div class="card">
+      <h2 class="center-heading">Этикетки</h2>
+      <div class="label-print-controls">
+        <button id="testPrintLabelsBtn" class="btn-secondary" type="button" disabled>Пробная печать A4</button>
+      </div>
+      <div id="labelsSummary" class="label-summary"></div>
+      <div id="labelsPreview"></div>
+    </div>
+  </div>
+
+  <div id="labelTestPrintSheet" class="label-test-sheet" aria-hidden="true"></div>
 
   <div class="tab-panel" id="tab-optimize">
     <div class="card">
@@ -56,9 +84,11 @@ appEl.innerHTML = `
 
 const tableWrap = document.getElementById("tableWrap");
 const input = document.getElementById("csvInput");
+const pdfInput = document.getElementById("pdfInput");
 const clearBtn = document.getElementById("clearBtn");
 const dropZone = document.getElementById("dropZone");
 const fileList = document.getElementById("fileList");
+const pdfFileList = document.getElementById("pdfFileList");
 const totalCountEl = document.getElementById("totalCount");
 const optBlocks = document.getElementById("optBlocks");
 const optResults = document.getElementById("optResults");
@@ -69,9 +99,15 @@ const saveBtn = document.getElementById("saveBtn");
 const cutDateInput = document.getElementById("cutDate");
 const exportBlocks = document.getElementById("exportBlocks");
 const exportTitle = document.getElementById("exportTitle");
+const labelSummary = document.getElementById("labelSummary");
+const labelReview = document.getElementById("labelReview");
+const labelsSummary = document.getElementById("labelsSummary");
+const labelsPreview = document.getElementById("labelsPreview");
+const testPrintLabelsBtn = document.getElementById("testPrintLabelsBtn");
+const labelTestPrintSheet = document.getElementById("labelTestPrintSheet");
 
 const DEFAULT_STOCK = 6500;
-const DEFAULT_KERF = 15;
+const DEFAULT_KERF = 5;
 const DEFAULT_MODE = "double";
 const PROFILE_BAD_LEFTOVER_RULES = {
   S35801: { scrapMax: 50, minUsefulLeftover: 650 },
@@ -93,7 +129,16 @@ let allParts = [];
 let optimizeCache = { groups: [], skewGroups: [], baseSkewCount: 0 };
 let deletedParts = [];
 const filesMap = new Map();
+const pdfFilesMap = new Map();
 const contentHashes = new Set();
+let labelDuplicateEvents = [];
+let labelConflictEvents = [];
+const excludedLabelPositions = new Set();
+const labelDecisions = new Map();
+let lastLabelReview = { rows: [], summary: {} };
+let lastPhysicalLabels = { labels: [], errors: [], byPosition: new Map(), summary: { total: 0, positions: 0 } };
+let lastLabelQueues = null;
+let labelPreviewMode = "logical";
 let exportCache = [];
 let exportReady = false;
 
@@ -430,6 +475,38 @@ function renderFileList() {
       rebuildAllParts();
       renderFileList();
       renderTable(allParts);
+      renderLabelKitCheck();
+    });
+  });
+}
+
+function renderPdfFileList() {
+  if (!pdfFileList) return;
+  if (!pdfFilesMap.size) {
+    pdfFileList.innerHTML = "";
+    return;
+  }
+  const rows = Array.from(pdfFilesMap.values())
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", { sensitivity: "base" }))
+    .map((f) => `
+    <div class="file-item" data-key="${f.key}">
+      <span class="file-name">${f.name}</span>
+      <span class="file-count">${f.positions.length} поз.</span>
+      <button class="file-remove" type="button" title="Удалить">×</button>
+    </div>
+  `).join("");
+  pdfFileList.innerHTML = rows;
+
+  pdfFileList.querySelectorAll(".file-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const parent = btn.closest(".file-item");
+      const key = parent?.getAttribute("data-key");
+      if (!key) return;
+      const fileInfo = pdfFilesMap.get(key);
+      if (fileInfo?.hash) contentHashes.delete(fileInfo.hash);
+      pdfFilesMap.delete(key);
+      renderPdfFileList();
+      renderLabelKitCheck();
     });
   });
 }
@@ -439,6 +516,520 @@ function rebuildAllParts() {
   for (const f of filesMap.values()) {
     allParts = allParts.concat(f.parts);
   }
+}
+
+function currentCutStore() {
+  return LabelData.collectStoresFromCutFiles(Array.from(filesMap.values())).store;
+}
+
+function currentPdfStore() {
+  return LabelData.collectStoresFromPdfFiles(Array.from(pdfFilesMap.values())).store;
+}
+
+function vetPositionsForLoad(positions, store, sourceKind, fileName) {
+  const acceptedKeys = new Set();
+  const duplicates = [];
+  const conflicts = [];
+  (positions || []).forEach((position) => {
+    const existing = store.get(position.key);
+    if (!existing) {
+      acceptedKeys.add(position.key);
+      return;
+    }
+    if (existing.signature === position.signature) {
+      duplicates.push({
+        key: position.key,
+        sourceKind,
+        status: LabelData.LABEL_STATUS.DUPLICATE,
+        fileName,
+        message: "Полностью совпадает с уже загруженной версией."
+      });
+      return;
+    }
+    conflicts.push({
+      key: position.key,
+      sourceKind,
+      status: LabelData.LABEL_STATUS.CONFLICT,
+      fileName,
+      oldVersion: existing,
+      newVersion: position,
+      message: "Заказ/позиция совпадает, но данные отличаются."
+    });
+  });
+  return { acceptedKeys, duplicates, conflicts };
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatLabelDifferenceText(row) {
+  const lines = [
+    `Позиция ${row.key}`,
+    `Состояние: ${row.status}`
+  ];
+  const issues = row.comparison?.issues || [];
+  if (!issues.length && row.warnings?.length) {
+    lines.push("", ...row.warnings);
+    return lines.join("\n");
+  }
+  issues.forEach((issue, index) => {
+    lines.push("");
+    lines.push(`${index + 1}. ${issue.source === "pdf" ? "Строка PDF" : "Строка CSV"}`);
+    lines.push(`Исходная строка: ${issue.detail.raw}`);
+    lines.push(`Заказ: ${issue.detail.orderId}`);
+    lines.push(`Позиция: ${issue.detail.productId}`);
+    lines.push(`Часть: ${issue.detail.partKind} (${issue.detail.partKindNormalized})`);
+    lines.push(`Профиль: ${issue.detail.profile} (${issue.detail.profileNormalized})`);
+    lines.push(`Ориентация: ${issue.detail.orient} (${issue.detail.orientNormalized})`);
+    lines.push(`Длина: ${issue.detail.lengthMm}`);
+    lines.push(`Количество: ${issue.detail.quantity}`);
+    lines.push(`Сигнатура: ${issue.detail.signature}`);
+    if (issue.closest) {
+      lines.push(`Ближайшая строка другой стороны: ${issue.closest.raw}`);
+      lines.push(`Различающиеся поля: ${issue.fieldDiffs?.length ? issue.fieldDiffs.join(", ") : "нет"}`);
+    }
+  });
+  return lines.join("\n");
+}
+
+function renderLabelsPreview() {
+  if (!labelsSummary || !labelsPreview) return;
+  const result = lastPhysicalLabels || { labels: [], errors: [], byPosition: new Map(), summary: { total: 0, positions: 0 } };
+  const queue = lastLabelQueues;
+  updateTestPrintButton();
+  labelsSummary.innerHTML = `
+    <div class="label-summary-grid">
+      <div><strong>${result.summary?.positions || 0}</strong><span>позиций</span></div>
+      <div><strong>${result.summary?.total || 0}</strong><span>этикеток</span></div>
+      <div><strong>${result.errors?.length || 0}</strong><span>ошибок формирования</span></div>
+      ${queue ? `
+        <div><strong>${queue.validation.autoLabelCount}</strong><span>по порядку пилы</span></div>
+        <div><strong>${queue.validation.manualLabelCount}</strong><span>ручной распил</span></div>
+        <div><strong>${queue.validation.ready ? "Да" : "Нет"}</strong><span>очередь готова</span></div>
+      ` : ""}
+    </div>
+  `;
+
+  if (result.errors?.length) {
+    labelsPreview.innerHTML = `
+      <div class="label-build-errors">
+        <div class="label-build-errors-title">Ошибки формирования этикеток</div>
+        ${result.errors.map((error) => `<div>${escapeHtml(error)}</div>`).join("")}
+      </div>
+    `;
+    return;
+  }
+
+  if (!result.labels?.length) {
+    labelsPreview.innerHTML = "<small>Нет готовых этикеток. Сначала загрузите раскрой и PDF, затем проверьте комплект.</small>";
+    return;
+  }
+
+  if (queue) {
+    renderLabelQueuePreview(queue);
+    return;
+  }
+
+  const groups = Array.from(result.byPosition.entries())
+    .sort((a, b) => a[0].localeCompare(b[0], "ru", { numeric: true }));
+  labelsPreview.innerHTML = groups.map(([positionKey, labels]) => `
+    <section class="label-preview-group">
+      <div class="label-preview-group-header">
+        <div>${escapeHtml(positionKey)}</div>
+        <span>${labels.length} этикеток</span>
+      </div>
+      <div class="label-preview-grid">
+        ${labels.map(renderLabelCard).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
+function getTestPrintLabels(limit = 4) {
+  const labels = lastPhysicalLabels.labels || [];
+  const selected = [];
+  const usedPositions = new Set();
+  labels.forEach((label) => {
+    if (selected.length >= limit) return;
+    const key = label.positionKey || LabelData.labelPositionKey(label.orderId, label.productId);
+    if (!key || usedPositions.has(key)) return;
+    usedPositions.add(key);
+    selected.push(label);
+  });
+  return selected;
+}
+
+function updateTestPrintButton() {
+  if (!testPrintLabelsBtn) return;
+  const available = getTestPrintLabels(1).length > 0;
+  testPrintLabelsBtn.disabled = !available;
+  testPrintLabelsBtn.title = available ? "" : "Сначала сформируйте этикетки";
+}
+
+function renderTestPrintSheet(labels) {
+  if (!labelTestPrintSheet) return;
+  const items = (labels || []).map((label) => `
+    <div class="label-test-print-item">
+      ${renderLabelCard(label)}
+    </div>
+  `).join("");
+  labelTestPrintSheet.innerHTML = `
+    <div class="label-test-page">
+      <div class="label-test-title">Пробная печать этикеток 100×50 мм</div>
+      <div class="label-test-list">${items}</div>
+      <div class="label-control-wrap">
+        <div class="label-control-frame"></div>
+        <div class="label-control-caption">Контрольный размер 100×50 мм — проверить линейкой</div>
+      </div>
+    </div>
+  `;
+}
+
+function printTestLabelsA4() {
+  const labels = getTestPrintLabels(4);
+  if (!labels.length) return;
+  const message = [
+    "В окне печати выберите:",
+    "— масштаб 100% или Фактический размер;",
+    "— не использовать “Вписать в страницу”;",
+    "— поля: по умолчанию или нет;",
+    "— после печати измерьте контрольную рамку линейкой."
+  ].join("\n");
+  if (!window.confirm(message)) return;
+  renderTestPrintSheet(labels);
+  document.body.classList.add("label-test-print");
+  window.print();
+  setTimeout(() => {
+    document.body.classList.remove("label-test-print");
+  }, 250);
+}
+
+function renderLabelQueuePreview(queue) {
+  const validation = queue.validation || {};
+  const controls = `
+    <div class="label-mode-switch">
+      <button type="button" class="${labelPreviewMode === "saw" ? "active" : ""}" data-label-preview-mode="saw">По порядку пилы</button>
+      <button type="button" class="${labelPreviewMode === "manual" ? "active" : ""}" data-label-preview-mode="manual">Ручной распил</button>
+    </div>
+  `;
+  const validationHtml = `
+    <div class="label-queue-check ${validation.ready ? "is-ready" : "is-error"}">
+      <div><strong>Итоговая проверка:</strong> ${validation.totalPhysicalLabels} = ${validation.autoLabelCount} + ${validation.manualLabelCount} + ${validation.excludedLabelCount}</div>
+      <div>Потерянные labelId: ${validation.lostLabelIds?.length || 0}</div>
+      <div>Повторно использованные labelId: ${validation.duplicateLabelIds?.length || 0}</div>
+      <div>Циклы без этикеток: ${validation.cyclesWithoutLabels?.length || 0}</div>
+      <div>Этикетки без цикла: ${validation.labelsWithoutCycle?.length || 0}</div>
+      <div>Ошибки single/double: ${validation.cyclesModeMismatch?.length || 0}</div>
+      ${validation.errors?.length ? `<div class="label-queue-errors">${validation.errors.map((error) => `<div>${escapeHtml(error)}</div>`).join("")}</div>` : ""}
+    </div>
+  `;
+  labelsPreview.innerHTML = controls + validationHtml + (labelPreviewMode === "manual"
+    ? renderManualLabelQueue(queue.manual || [])
+    : renderSawLabelQueue(queue.auto || []));
+
+  labelsPreview.querySelectorAll("[data-label-preview-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      labelPreviewMode = btn.getAttribute("data-label-preview-mode") === "manual" ? "manual" : "saw";
+      renderLabelsPreview();
+    });
+  });
+}
+
+function renderSawLabelQueue(autoQueue) {
+  if (!autoQueue.length) return "<small>Очередь по порядку пилы пока не сформирована.</small>";
+  return autoQueue.map((profile) => `
+    <section class="label-saw-profile">
+      <div class="label-saw-profile-title">${escapeHtml(profile.profile)}</div>
+      ${profile.bars.map((bar) => `
+        <div class="label-saw-bar">
+          <div class="label-saw-bar-title">Хлыст ${bar.barNo}</div>
+          ${bar.cycles.map((cycle) => `
+            <div class="label-saw-cycle">
+              <div class="label-saw-cycle-meta">
+                <strong>Цикл ${cycle.cycleNo}</strong>
+                <span>${cycle.lengthMm} мм</span>
+                <span>${cycle.mode}</span>
+              </div>
+              <div class="label-cycle-cards">
+                ${cycle.labels.map((label, idx) => `
+                  <div class="label-cycle-card">
+                    <div class="label-cycle-slot">${cycle.mode === "double" ? (idx === 0 ? "A" : "B") : "single"}</div>
+                    ${renderLabelCard(label)}
+                  </div>
+                `).join("") || "<div class=\"label-cycle-empty\">Нет этикетки</div>"}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `).join("")}
+    </section>
+  `).join("");
+}
+
+function renderManualLabelQueue(manualQueue) {
+  if (!manualQueue.length) return "<small>Ручной распил пуст.</small>";
+  return `
+    <section class="label-manual-queue">
+      <div class="label-saw-profile-title">РУЧНОЙ РАСПИЛ</div>
+      ${manualQueue.map((item) => `
+        <div class="label-manual-item">
+          <div class="label-manual-meta">
+            <strong>${item.no}</strong>
+            <span>${escapeHtml(item.profile)}</span>
+            <span>${item.lengthMm} мм</span>
+            ${item.reason ? `<span>${escapeHtml(item.reason)}</span>` : ""}
+          </div>
+          ${item.label ? renderLabelCard(item.label) : "<div class=\"label-cycle-empty\">Нет этикетки</div>"}
+        </div>
+      `).join("")}
+    </section>
+  `;
+}
+
+function displayPartKind(value) {
+  const key = LabelData.normalizeLabelKey(value);
+  if (key.includes("створ")) return "СТВОРКА";
+  if (key.includes("рам")) return "РАМА";
+  return String(value || "").toUpperCase();
+}
+
+function renderLabelCard(label) {
+  const sketchUrl = label.sketch?.croppedDataUrl || label.sketch?.dataUrl || "";
+  const sketch = sketchUrl
+    ? `<img class="label-card-sketch-img" src="${sketchUrl}" alt="">`
+    : `<div class="label-card-sketch-empty"></div>`;
+  const dimension = label.dimension
+    ? `${label.dimension.widthMm} × ${label.dimension.heightMm} мм`
+    : "—";
+  return `
+    <article class="label-card" data-label-id="${escapeHtml(label.id)}">
+      <div class="label-card-text">
+        <div class="label-card-order">${escapeHtml(label.orderId)}/${escapeHtml(label.productId)}</div>
+        <div class="label-card-main">${displayPartKind(label.partKind)} • ${escapeHtml(label.side)} • ${label.lengthMm} мм</div>
+        <div class="label-card-sub">${escapeHtml(label.reinforcementText || "АРМ.")}</div>
+        <div class="label-card-sub">ГАБАРИТ: ${escapeHtml(dimension)}</div>
+      </div>
+      <div class="label-card-divider"></div>
+      <div class="label-card-sketch">${sketch}</div>
+    </article>
+  `;
+}
+
+function renderLabelKitCheck() {
+  if (!labelSummary || !labelReview) return;
+  const cutFiles = Array.from(filesMap.values());
+  const pdfFiles = Array.from(pdfFilesMap.values());
+  const cutCollected = LabelData.collectStoresFromCutFiles(cutFiles);
+  const pdfCollected = LabelData.collectStoresFromPdfFiles(pdfFiles);
+  const conflicts = [
+    ...cutCollected.conflicts,
+    ...pdfCollected.conflicts,
+    ...labelConflictEvents
+  ];
+  const duplicates = [
+    ...cutCollected.duplicates,
+    ...pdfCollected.duplicates,
+    ...labelDuplicateEvents
+  ];
+  const review = LabelData.buildLabelKitReview(
+    cutCollected.store,
+    pdfCollected.store,
+    conflicts,
+    duplicates,
+    excludedLabelPositions,
+    labelDecisions
+  );
+  lastLabelReview = review;
+  lastPhysicalLabels = LabelData.buildPhysicalLabelsForReviewRows(review.rows);
+  renderLabelsPreview();
+
+  labelSummary.innerHTML = `
+    <div class="label-summary-grid">
+      <div><strong>${cutFiles.length}</strong><span>файлов раскроя</span></div>
+      <div><strong>${pdfFiles.length}</strong><span>PDF</span></div>
+      <div><strong>${review.summary.positions}</strong><span>позиций</span></div>
+      <div><strong>${review.summary.ready}</strong><span>готово</span></div>
+      <div><strong>${review.summary.noPdf}</strong><span>нет PDF</span></div>
+      <div><strong>${review.summary.noCut}</strong><span>нет раскроя</span></div>
+      <div><strong>${review.summary.conflicts}</strong><span>конфликтов</span></div>
+      <div><strong>${review.summary.ambiguous}</strong><span>неоднозначных</span></div>
+      <div><strong>${review.summary.duplicates}</strong><span>дублей пропущено</span></div>
+      <div><strong>${review.summary.matchedRows}</strong><span>строк сопоставлено</span></div>
+      <div><strong>${review.summary.physicalDetails}</strong><span>физических деталей</span></div>
+    </div>
+  `;
+
+  if (!review.rows.length && !duplicates.length) {
+    labelReview.innerHTML = "<small>Нет данных для проверки.</small>";
+    return;
+  }
+
+  const duplicateHtml = duplicates.length
+    ? `
+      <div class="label-duplicate-list">
+        <div class="label-duplicate-title">Дубликаты пропущены</div>
+        ${duplicates.map((item) => `<div>${escapeHtml(item.key)}${item.fileName ? " - " + escapeHtml(item.fileName) : ""}</div>`).join("")}
+      </div>
+    `
+    : "";
+
+  const rowsHtml = review.rows.map((row) => {
+    const cutFilesText = row.cut?.sourceFiles?.join(", ") || "";
+    const pdfFilesText = row.pdf?.pdfFiles?.join(", ") || "";
+    const warnings = row.warnings.length
+      ? `<div class="label-warning-lines">${row.warnings.map((warning) => `<div>${escapeHtml(warning)}</div>`).join("")}</div>`
+      : "";
+    const actions = renderLabelActions(row);
+    return `
+      <tr data-key="${row.key}">
+        <td>${escapeHtml(row.key)}</td>
+        <td>${cutFilesText ? escapeHtml(cutFilesText) : "—"}</td>
+        <td>${pdfFilesText ? escapeHtml(pdfFilesText) : "—"}</td>
+        <td><span class="label-status">${escapeHtml(row.status)}</span></td>
+        <td>${row.detailCount}</td>
+        <td>${row.physicalCount}</td>
+        <td>${warnings || "—"}${actions}</td>
+      </tr>
+    `;
+  }).join("");
+
+  labelReview.innerHTML = `
+    ${duplicateHtml}
+    <table class="label-check-table">
+      <thead>
+        <tr>
+          <th>Заказ / позиция</th>
+          <th>Файл раскроя</th>
+          <th>PDF</th>
+          <th>Состояние</th>
+          <th>Строк сопоставлено</th>
+          <th>Физических деталей</th>
+          <th>Предупреждения / действия</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+
+  labelReview.querySelectorAll("[data-label-action]").forEach((btn) => {
+    btn.addEventListener("click", () => handleLabelAction(btn));
+  });
+}
+
+function renderLabelActions(row) {
+  const status = row.status;
+  const keyAttr = escapeHtml(row.key);
+  if (status === LabelData.LABEL_STATUS.NO_PDF) {
+    return `
+      <div class="label-actions">
+        <button type="button" data-label-action="load-pdf" data-key="${keyAttr}">Загрузить PDF</button>
+        <button type="button" data-label-action="without-labels" data-key="${keyAttr}">Продолжить без этикеток</button>
+        <button type="button" data-label-action="exclude" data-key="${keyAttr}">Исключить позицию</button>
+        <button type="button" data-label-action="cancel-prep" data-key="${keyAttr}">Отменить подготовку</button>
+      </div>
+    `;
+  }
+  if (status === LabelData.LABEL_STATUS.NO_CUT) {
+    return `
+      <div class="label-actions">
+        <button type="button" data-label-action="load-cut" data-key="${keyAttr}">Загрузить файл раскроя</button>
+        <button type="button" data-label-action="keep-pdf" data-key="${keyAttr}">Оставить PDF</button>
+        <button type="button" data-label-action="exclude" data-key="${keyAttr}">Исключить из задания</button>
+        <button type="button" data-label-action="delete-pdf-position" data-key="${keyAttr}">Удалить загрузку</button>
+      </div>
+    `;
+  }
+  if (status === LabelData.LABEL_STATUS.CONFLICT) {
+    if (row.conflictKind === "version") {
+      return `
+        <div class="label-actions">
+          <button type="button" data-label-action="keep-old" data-key="${keyAttr}">Оставить старую версию</button>
+          <button type="button" data-label-action="use-new" data-key="${keyAttr}">Использовать новую</button>
+          <button type="button" data-label-action="exclude" data-key="${keyAttr}">Исключить позицию</button>
+          <button type="button" data-label-action="back-load" data-key="${keyAttr}">Вернуться к загрузке</button>
+        </div>
+      `;
+    }
+    return `
+      <div class="label-actions">
+        <button type="button" data-label-action="show-differences" data-key="${keyAttr}">Показать различия</button>
+        <button type="button" data-label-action="replace-file" data-key="${keyAttr}">Заменить файл</button>
+        <button type="button" data-label-action="exclude" data-key="${keyAttr}">Исключить позицию</button>
+        <button type="button" data-label-action="without-labels" data-key="${keyAttr}">Продолжить без этикеток</button>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function removePdfPosition(key) {
+  pdfFilesMap.forEach((fileInfo, fileKeyValue) => {
+    fileInfo.positions = (fileInfo.positions || []).filter((position) => position.key !== key);
+    fileInfo.pages = (fileInfo.pages || []).filter((page) => LabelData.labelPositionKey(page.orderId, page.productId) !== key);
+    if (!fileInfo.positions.length) {
+      if (fileInfo.hash) contentHashes.delete(fileInfo.hash);
+      pdfFilesMap.delete(fileKeyValue);
+    }
+  });
+}
+
+function handleLabelAction(btn) {
+  const action = btn.getAttribute("data-label-action");
+  const key = btn.getAttribute("data-key");
+  if (!action || !key) return;
+
+  if (action === "load-pdf") {
+    pdfInput?.click();
+    return;
+  }
+  if (action === "load-cut") {
+    input?.click();
+    return;
+  }
+  if (action === "without-labels") {
+    if (!window.confirm(`Продолжить позицию ${key} без этикеток?`)) return;
+    labelDecisions.set(key, "without-labels");
+  } else if (action === "exclude") {
+    if (!window.confirm(`Исключить позицию ${key} из проверки комплекта?`)) return;
+    excludedLabelPositions.add(key);
+  } else if (action === "delete-pdf-position") {
+    if (!window.confirm(`Удалить PDF-данные по позиции ${key}?`)) return;
+    removePdfPosition(key);
+    renderPdfFileList();
+  } else if (action === "keep-pdf") {
+    labelDecisions.set(key, "keep-pdf");
+  } else if (action === "show-differences") {
+    const row = lastLabelReview.rows.find((item) => item.key === key);
+    window.alert(row ? formatLabelDifferenceText(row) : `Нет диагностических данных для позиции ${key}.`);
+    return;
+  } else if (action === "replace-file") {
+    document.querySelector('.tab-btn[data-tab="import"]')?.click();
+    return;
+  } else if (action === "keep-old") {
+    labelDecisions.set(key, "keep-old");
+  } else if (action === "use-new") {
+    if (!window.confirm(`Использовать новую версию данных для позиции ${key}?`)) return;
+    labelDecisions.set(key, "use-new");
+  } else if (action === "cancel-prep") {
+    if (!window.confirm("Отменить подготовку этикеток и очистить PDF/решения?")) return;
+    pdfFilesMap.clear();
+    labelDuplicateEvents = [];
+    labelConflictEvents = [];
+    excludedLabelPositions.clear();
+    labelDecisions.clear();
+    renderPdfFileList();
+  } else if (action === "back-load") {
+    document.querySelector('.tab-btn[data-tab="import"]')?.click();
+    return;
+  }
+
+  renderLabelKitCheck();
 }
 
 function decodeSmart(buffer) {
@@ -473,15 +1064,90 @@ async function addFiles(files) {
 
     const { parts, buffer } = await readFileToParts(file);
     const contentHash = await hashBuffer(buffer);
-    if (contentHashes.has(contentHash)) continue;
+    if (contentHashes.has(contentHash)) {
+      labelDuplicateEvents.push({
+        key: file.name,
+        sourceKind: "cut",
+        status: LabelData.LABEL_STATUS.DUPLICATE,
+        fileName: file.name,
+        message: "Файл с таким содержимым уже загружен."
+      });
+      continue;
+    }
+
+    const positions = LabelData.buildCutPositions(parts, file.name);
+    const vetted = vetPositionsForLoad(positions, currentCutStore(), "cut", file.name);
+    labelDuplicateEvents = labelDuplicateEvents.concat(vetted.duplicates);
+    labelConflictEvents = labelConflictEvents.concat(vetted.conflicts);
+    const acceptedParts = parts.filter((part) => {
+      const positionKey = LabelData.labelPositionKey(part.orderId, part.productId);
+      return vetted.acceptedKeys.has(positionKey);
+    });
+    if (!acceptedParts.length) continue;
 
     contentHashes.add(contentHash);
-    filesMap.set(key, { key, name: file.name, parts, hash: contentHash });
+    filesMap.set(key, { key, name: file.name, parts: acceptedParts, hash: contentHash });
   }
   rebuildAllParts();
   exportReady = false;
+  lastLabelQueues = null;
   renderFileList();
   renderTable(allParts);
+  renderLabelKitCheck();
+}
+
+async function addPdfFiles(files) {
+  for (const file of files) {
+    const key = fileKey(file);
+    if (pdfFilesMap.has(key)) continue;
+    const buffer = await file.arrayBuffer();
+    const contentHash = await hashBuffer(buffer);
+    if (contentHashes.has(contentHash)) {
+      labelDuplicateEvents.push({
+        key: file.name,
+        sourceKind: "pdf",
+        status: LabelData.LABEL_STATUS.DUPLICATE,
+        fileName: file.name,
+        message: "PDF с таким содержимым уже загружен."
+      });
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = await LabelPdf.parseSuperOknaPdfArrayBuffer(buffer, file.name);
+    } catch (error) {
+      labelConflictEvents.push({
+        key: file.name,
+        sourceKind: "pdf",
+        status: LabelData.LABEL_STATUS.CONFLICT,
+        fileName: file.name,
+        message: `PDF не удалось разобрать: ${error?.message || error}`
+      });
+      continue;
+    }
+
+    const vetted = vetPositionsForLoad(parsed.positions, currentPdfStore(), "pdf", file.name);
+    labelDuplicateEvents = labelDuplicateEvents.concat(vetted.duplicates);
+    labelConflictEvents = labelConflictEvents.concat(vetted.conflicts);
+    const acceptedPositions = parsed.positions.filter((position) => vetted.acceptedKeys.has(position.key));
+    if (!acceptedPositions.length) continue;
+
+    const acceptedKeys = new Set(acceptedPositions.map((position) => position.key));
+    contentHashes.add(contentHash);
+    pdfFilesMap.set(key, {
+      key,
+      name: file.name,
+      hash: contentHash,
+      pageCount: parsed.pageCount,
+      imageCount: parsed.imageCount,
+      pages: parsed.pages.filter((page) => acceptedKeys.has(LabelData.labelPositionKey(page.orderId, page.productId))),
+      positions: acceptedPositions
+    });
+  }
+  renderPdfFileList();
+  lastLabelQueues = null;
+  renderLabelKitCheck();
 }
 
 input.addEventListener("change", async () => {
@@ -489,6 +1155,13 @@ input.addEventListener("change", async () => {
   if (!files.length) return;
   await addFiles(files);
   input.value = "";
+});
+
+pdfInput.addEventListener("change", async () => {
+  const files = Array.from(pdfInput.files || []);
+  if (!files.length) return;
+  await addPdfFiles(files);
+  pdfInput.value = "";
 });
 
 dropZone.addEventListener("dragover", (e) => {
@@ -502,25 +1175,38 @@ dropZone.addEventListener("drop", async (e) => {
   e.preventDefault();
   dropZone.classList.remove("is-dragover");
   const files = Array.from(e.dataTransfer.files || []).filter((f) =>
-    f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".txt")
+    f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".txt") || f.name.toLowerCase().endsWith(".pdf")
   );
   if (!files.length) return;
-  await addFiles(files);
+  const cutFiles = files.filter((f) => f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".txt"));
+  const pdfFiles = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+  if (cutFiles.length) await addFiles(cutFiles);
+  if (pdfFiles.length) await addPdfFiles(pdfFiles);
 });
 
 clearBtn.addEventListener("click", () => {
   allParts = [];
   deletedParts = [];
   filesMap.clear();
+  pdfFilesMap.clear();
   contentHashes.clear();
+  labelDuplicateEvents = [];
+  labelConflictEvents = [];
+  excludedLabelPositions.clear();
+  labelDecisions.clear();
+  lastLabelQueues = null;
   exportReady = false;
   renderFileList();
+  renderPdfFileList();
   renderTable(allParts);
+  renderLabelKitCheck();
 });
 
 const tabButtons = document.querySelectorAll(".tab-btn");
 const panels = {
   import: document.getElementById("tab-import"),
+  check: document.getElementById("tab-check"),
+  labels: document.getElementById("tab-labels"),
   optimize: document.getElementById("tab-optimize"),
   export: document.getElementById("tab-export")
 };
@@ -558,7 +1244,7 @@ function sideDesignationsForKind(kind) {
   return [];
 }
 
-function labelPositionKey(part) {
+function physicalLabelPositionKey(part) {
   return [
     String(part.orderId || "").trim(),
     String(part.productId || "").trim(),
@@ -582,10 +1268,13 @@ function createPhysicalPiece(part, groupTitle, instanceNo, instanceTotal, design
     angles: String(part.angles || "").trim(),
     orderId: label.orderId,
     productId: label.productId,
+    contour: String(part.contour || part.position || "").trim(),
+    partKind: String(part.partKind || "").trim(),
     title: String(part.name || "").trim(),
     orient: String(part.orient || "").trim(),
     profileCode: String(part.profileCode || "").trim(),
     sourcePartId: String(part.id || ""),
+    sourceUnitNo: null,
     instanceNo,
     instanceTotal,
     labelDesignation: designation,
@@ -603,74 +1292,98 @@ function makeLabelWarning(part, groupTitle, message) {
 function expandPartsToPieces(parts, groupTitle = "") {
   const pieces = [];
   const warnings = [];
-  const byPosition = new Map();
 
   for (const p of parts) {
-    const key = labelPositionKey(p);
-    if (!byPosition.has(key)) byPosition.set(key, []);
-    byPosition.get(key).push(p);
+    const len = Number(p.lengthMm);
+    const qtyRaw = Number(p.quantity) || 0;
+    const qty = Math.floor(qtyRaw);
+    const kind = normalizeOrientKind(p.orient);
+    const designations = sideDesignationsForKind(kind);
+    const fallbackDesignation = fallbackDesignationForKind(kind, p.orient);
+    const sourceId = String(p.id || `${p.orderId}_${p.productId}_${p.profileCode}_${p.lengthMm}_${p.orient}`);
+
+    if (!Number.isFinite(len) || len <= 0) continue;
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+
+    if (!kind) {
+      warnings.push(makeLabelWarning(p, groupTitle, "непонятный ориентир, сторона для наклейки не назначена точно."));
+    }
+    if (!Number.isInteger(qtyRaw)) {
+      warnings.push(makeLabelWarning(p, groupTitle, "количество не целое, сторона для наклейки не назначена точно."));
+    }
+    if (kind && Number.isInteger(qtyRaw) && qty % 2 === 1) {
+      warnings.push(makeLabelWarning(p, groupTitle, "нечетное количество в строке, последняя деталь оставлена без точной стороны."));
+    }
+
+    const canAssignPairs = kind && Number.isInteger(qtyRaw);
+    const pairTotal = Math.ceil(qty / 2);
+
+    for (let index = 0; index < qty; index++) {
+      const sourceUnitNo = index + 1;
+      const pairNo = Math.floor(index / 2) + 1;
+      const pairSlot = index % 2;
+      const isOddLeftover = canAssignPairs && qty % 2 === 1 && index === qty - 1;
+      const designation = canAssignPairs && !isOddLeftover
+        ? designations[pairSlot]
+        : fallbackDesignation;
+      const pairKey = canAssignPairs && !isOddLeftover
+        ? [
+            String(p.orderId || "").trim(),
+            String(p.productId || "").trim(),
+            String(p.profileCode || "").trim(),
+            sourceId,
+            kind,
+            pairNo
+          ].join("||")
+        : "";
+      const piece = createPhysicalPiece(p, groupTitle, pairNo, pairTotal, designation, pairKey, pairSlot);
+      piece.sourceUnitNo = sourceUnitNo;
+      if (!pairKey) piece.doublePairBlocked = true;
+      pieces.push(piece);
+    }
   }
 
-  byPosition.forEach((positionParts) => {
-    const byOrient = new Map();
-    positionParts.forEach((part) => {
-      const kind = normalizeOrientKind(part.orient);
-      const key = kind || `unknown:${String(part.orient || "").trim()}`;
-      if (!byOrient.has(key)) byOrient.set(key, []);
-      byOrient.get(key).push(part);
-    });
+  return { pieces, warnings };
+}
 
-    byOrient.forEach((orientParts, orientKey) => {
-      const sample = orientParts[0] || {};
-      const kind = orientKey === "horizontal" || orientKey === "vertical" ? orientKey : "";
-      const ambiguous = kind && orientParts.length !== 1;
-      if (!kind) {
-        warnings.push(makeLabelWarning(sample, groupTitle, "непонятный ориентир, сторона для наклейки не назначена точно."));
-      }
-      if (ambiguous) {
-        warnings.push(makeLabelWarning(sample, groupTitle, "несколько строк с одним ориентиром в одной позиции, сторона не угадывается."));
-      }
-
-      orientParts.forEach((p) => {
-        const len = Number(p.lengthMm);
-        const qtyRaw = Number(p.quantity) || 0;
-        const qty = Math.floor(qtyRaw);
-        const total = qty;
-        const exactPair = kind && !ambiguous && Number.isInteger(qtyRaw);
-        const designations = exactPair ? sideDesignationsForKind(kind) : [fallbackDesignationForKind(kind, p.orient)];
-        const sourceId = String(p.id || `${p.orderId}_${p.productId}_${p.profileCode}_${p.lengthMm}_${p.orient}`);
-
-        if (!Number.isFinite(len) || len <= 0) return;
-        if (!Number.isFinite(qty) || qty <= 0) return;
-        if (!Number.isInteger(qtyRaw)) {
-          warnings.push(makeLabelWarning(p, groupTitle, "количество не целое, сторона для наклейки не назначена точно."));
-        }
-
-        for (let instanceNo = 1; instanceNo <= qty; instanceNo++) {
-          if (exactPair) {
-            designations.forEach((designation, pairSlot) => {
-              const pairKey = [
-                String(p.orderId || "").trim(),
-                String(p.productId || "").trim(),
-                String(p.profileCode || "").trim(),
-                sourceId,
-                kind,
-                instanceNo
-              ].join("||");
-              pieces.push(createPhysicalPiece(p, groupTitle, instanceNo, total, designation, pairKey, pairSlot));
-            });
-          } else {
-            const countPerInstance = kind ? 2 : 1;
-            for (let i = 0; i < countPerInstance; i++) {
-              pieces.push(createPhysicalPiece(p, groupTitle, instanceNo, total, designations[0], "", null));
-            }
-          }
-        }
-      });
+function buildPhysicalLabelPool() {
+  const map = new Map();
+  (lastPhysicalLabels.labels || []).forEach((label) => {
+    const key = [
+      String(label.sourcePartId || label.csvSource?.detail?.sourcePartId || "").trim(),
+      String(label.sourceUnitNo || "").trim()
+    ].join("||");
+    if (!key.trim() || key === "||") return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(label);
+  });
+  map.forEach((labels) => {
+    labels.sort((a, b) => {
+      const sideA = String(a.side || "");
+      const sideB = String(b.side || "");
+      const sideCmp = sideA.localeCompare(sideB, "ru", { sensitivity: "base" });
+      if (sideCmp !== 0) return sideCmp;
+      return String(a.id).localeCompare(String(b.id));
     });
   });
+  return map;
+}
 
-  return { pieces, warnings };
+function attachPhysicalLabelsToPieces() {
+  const pool = buildPhysicalLabelPool();
+  const attach = (piece) => {
+    const key = [
+      String(piece.sourcePartId || "").trim(),
+      String(piece.sourceUnitNo || "").trim()
+    ].join("||");
+    const bucket = pool.get(key) || [];
+    const label = bucket.shift() || null;
+    piece.labelId = label?.id || "";
+    piece.physicalLabel = label;
+    return piece;
+  };
+  optimizeCache.groups.forEach((group) => group.pieces.forEach(attach));
+  optimizeCache.skewGroups.forEach((group) => group.pieces.forEach(attach));
 }
 
 function buildOptimizeData(parts) {
@@ -708,7 +1421,7 @@ function buildLeftoverSkewItems(groups) {
     if (g.mode !== "double") return;
     const { leftovers: groupLeftovers } = buildDoublePairs(g.pieces);
     groupLeftovers.forEach((piece) => {
-      leftovers.push({ ...piece, title: g.title });
+      leftovers.push({ ...piece, title: g.title, manualReason: "не сформирована пара двойного режима" });
     });
   });
   return leftovers;
@@ -720,6 +1433,7 @@ function renderOptimize(parts) {
     optBlocks.innerHTML = "<small>Нет данных</small>";
     optResults.innerHTML = "<small>Нет расчетов</small>";
     optimizeCache = { groups: [], skewGroups: [], baseSkewCount: 0 };
+    lastLabelQueues = null;
     exportReady = false;
     renderExport();
     return;
@@ -731,6 +1445,7 @@ function renderOptimize(parts) {
     optBlocks.innerHTML = "<small>Нет данных</small>";
     optResults.innerHTML = "<small>Нет расчетов</small>";
     exportReady = false;
+    lastLabelQueues = null;
     renderExport();
     return;
   }
@@ -835,12 +1550,45 @@ function renderOptimize(parts) {
         const countEl = line.querySelector(".opt-line-count");
         if (countEl) countEl.textContent = `${shown} шт.`;
         exportReady = false;
+        lastLabelQueues = null;
         renderExport();
       });
     });
 
   renderExport();
   renderLabelWarnings(optBlocks);
+}
+
+function buildManualQueueGroups(manualMap) {
+  return Array.from(manualMap.entries()).map(([title, pieces]) => ({
+    title,
+    reason: pieces.some((piece) => piece.manualReason === "не сформирована пара двойного режима")
+      ? "не сформирована пара двойного режима"
+      : "ручной режим",
+    pieces
+  }));
+}
+
+function excludedLabelCountForQueues() {
+  return (lastLabelReview.rows || []).reduce((sum, row) => {
+    const decision = labelDecisions.get(row.key);
+    if (decision === "without-labels" || excludedLabelPositions.has(row.key)) {
+      return sum + (Number(row.physicalCount) || 0);
+    }
+    return sum;
+  }, 0);
+}
+
+function rebuildLabelQueues(manualGroups) {
+  lastLabelQueues = LabelData.buildLabelQueuesFromOptimizeState({
+    physicalLabels: lastPhysicalLabels.labels || [],
+    groups: optimizeCache.groups || [],
+    lastExportResults: optimizeCache.lastExportResults || new Map(),
+    manualGroups,
+    excludedLabelCount: excludedLabelCountForQueues()
+  });
+  labelPreviewMode = "saw";
+  renderLabelsPreview();
 }
 
 function renderLabelWarnings(target) {
@@ -940,16 +1688,15 @@ function formatOptimizeResult(result, stock, kerf) {
         else if (orientKey.startsWith("гор") || orientKey === "г") orientLetter = "Гор";
         else if (orientKey.startsWith("нак") || orientKey === "н") orientLetter = "Нак";
         const baseText = meta.orderId && meta.productId ? `${meta.orderId} / ${meta.productId}` : "";
-        const instanceText = meta.instanceNo && meta.instanceTotal ? `${meta.instanceNo}/${meta.instanceTotal}` : "";
         const designation = meta.labelDesignation || meta.label?.designation || orientLetter;
-        const details = [baseText, instanceText, designation].filter(Boolean);
+        const details = [baseText, designation].filter(Boolean);
         const metaText = details.length ? details.join(" · ") : "";
         const angleNorm = normalizeAngles(meta.angles || "");
         const chipClass = angleNorm && angleNorm !== "45-45" ? "cut-chip cut-chip--skew" : "cut-chip";
         return `
           <span class="${chipClass}">
-            <span class="cut-chip-length">${p.length}</span>
             <span class="cut-chip-meta">${metaText}</span>
+            <span class="cut-chip-length">${p.length}</span>
           </span>
         `;
       })
@@ -996,11 +1743,27 @@ function appendOptimizeError(title, message, modeLabel = "") {
   optResults.appendChild(section);
 }
 
+function doublePairKey(piece) {
+  if (piece.doublePairBlocked) return "";
+  if (piece.labelPairKey) return `exact||${piece.labelPairKey}`;
+  return [
+    "fallback",
+    String(piece.orderId || "").trim(),
+    String(piece.productId || "").trim(),
+    String(piece.profileCode || "").trim(),
+    String(piece.title || "").trim(),
+    String(piece.orient || "").trim().toLowerCase(),
+    String(piece.labelDesignation || piece.label?.designation || "").trim(),
+    Number(piece.lengthMm || 0),
+    normalizeAngles(piece.angles || "")
+  ].join("||");
+}
+
 function buildDoublePairs(pieces) {
   const byKey = new Map();
   const leftovers = [];
   pieces.forEach((p) => {
-    const key = String(p.labelPairKey || "");
+    const key = doublePairKey(p);
     if (!key) {
       leftovers.push(p);
       return;
@@ -1013,19 +1776,28 @@ function buildDoublePairs(pieces) {
     const sorted = [...list].sort((a, b) => {
       const slotA = Number.isFinite(a.labelPairSlot) ? a.labelPairSlot : 99;
       const slotB = Number.isFinite(b.labelPairSlot) ? b.labelPairSlot : 99;
-      return slotA - slotB;
+      if (slotA !== slotB) return slotA - slotB;
+      const sourceA = String(a.sourcePartId || "");
+      const sourceB = String(b.sourcePartId || "");
+      const sourceCmp = sourceA.localeCompare(sourceB, "ru", { sensitivity: "base" });
+      if (sourceCmp !== 0) return sourceCmp;
+      return (Number(a.instanceNo) || 0) - (Number(b.instanceNo) || 0);
     });
-    if (
-      sorted.length === 2 &&
-      Number(sorted[0].lengthMm) === Number(sorted[1].lengthMm) &&
-      normalizeAngles(sorted[0].angles || "") === normalizeAngles(sorted[1].angles || "")
-    ) {
-      const a = sorted[0];
-      const b = sorted[1];
-      paired.push({ lengthMm: a.lengthMm, angles: a.angles, meta: [a, b] });
-      return;
+    for (let i = 0; i + 1 < sorted.length; i += 2) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      if (
+        Number(a.lengthMm) === Number(b.lengthMm) &&
+        normalizeAngles(a.angles || "") === normalizeAngles(b.angles || "")
+      ) {
+        paired.push({ lengthMm: a.lengthMm, angles: a.angles, meta: [a, b] });
+      } else {
+        leftovers.push(a, b);
+      }
     }
-    leftovers.push(...sorted);
+    if (sorted.length % 2 === 1) {
+      leftovers.push(sorted[sorted.length - 1]);
+    }
   });
   return { paired, leftovers };
 }
@@ -1352,6 +2124,7 @@ optimizeBtn.addEventListener("click", () => {
     return;
   }
 
+  attachPhysicalLabelsToPieces();
   renderLabelWarnings(optResults);
 
   if (optimizeCache.groups.length) {
@@ -1410,9 +2183,10 @@ optimizeBtn.addEventListener("click", () => {
   };
 
   optimizeCache.skewGroups.forEach((group) => {
-    group.pieces.forEach((piece) => addPieceToTitle(group.title, piece));
+    group.pieces.forEach((piece) => addPieceToTitle(group.title, { ...piece, manualReason: "косой элемент" }));
   });
   leftoverSkewItems.forEach((piece) => addPieceToTitle(piece.title || "Косые элементы", piece));
+  const manualQueueGroups = buildManualQueueGroups(byTitleMap);
 
   if (byTitleMap.size) {
     const manualCount = optimizeCache.skewGroups.reduce((s, g) => s + g.pieces.length, 0) + leftoverSkewItems.length;
@@ -1432,10 +2206,13 @@ optimizeBtn.addEventListener("click", () => {
 
   appendDeletedResults();
   exportReady = true;
+  rebuildLabelQueues(manualQueueGroups);
   renderExport();
 });
 
 renderTable([]);
+renderPdfFileList();
+renderLabelKitCheck();
 
 if (cutDateInput) {
   const today = new Date();
@@ -1449,6 +2226,10 @@ if (printBtn) {
   printBtn.addEventListener("click", () => {
     window.print();
   });
+}
+
+if (testPrintLabelsBtn) {
+  testPrintLabelsBtn.addEventListener("click", printTestLabelsA4);
 }
 
 if (printImportBtn) {
@@ -1487,11 +2268,11 @@ if (saveBtn) {
     .opt-left-percent { font-weight: 700; }
     .percent-scrap { color: #1d4ed8; }
     .percent-useful { color: #15803d; }
-    .cut-chip { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px; margin-right: 6px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; font-weight: 700; text-align: center; min-width: 72px; }
+    .cut-chip { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px; margin-right: 6px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; font-weight: 400; text-align: center; min-width: 72px; }
     .cut-chip--skew { background: #111; border-color: #111; color: #fff; }
-    .cut-chip-length { display: block; font-size: 16px; }
-    .cut-chip-meta { display: block; margin-top: 2px; padding-top: 2px; border-top: 1px solid #cbd5e1; font-weight: 600; font-size: 13px; color: #475569; white-space: nowrap; }
-    .cut-chip--skew .cut-chip-meta { border-top-color: #333; color: #e2e8f0; }
+    .cut-chip-length { display: block; font-size: 16px; font-weight: 600; color: #64748b; }
+    .cut-chip-meta { display: block; margin-bottom: 2px; padding-bottom: 2px; border-bottom: 1px solid #cbd5e1; font-weight: 600; font-size: 13px; color: #111827; white-space: nowrap; }
+    .cut-chip--skew .cut-chip-meta { border-bottom-color: #333; color: #e2e8f0; }
     .opt-auto-notice { margin: 12px 0; padding: 10px 12px; border: 2px solid #1d4ed8; background: #eff6ff; color: #1d4ed8; font-weight: 700; text-align: center; border-radius: 10px; }
     .opt-manual-notice { margin: 12px 0; padding: 10px 12px; border: 2px solid #b42318; background: #fff2f2; color: #b42318; font-weight: 700; text-align: center; border-radius: 10px; }
     .label-warning { margin: 12px 0; padding: 10px 12px; border: 2px solid #b7791f; background: #fff8e5; color: #7a4a00; border-radius: 10px; font-size: 14px; }

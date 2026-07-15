@@ -85,6 +85,13 @@ function extractAngles(text) {
 
 function parseOrderAndProduct(str) {
   const raw = String(str || "").trim();
+  const match = raw.match(/(\d{3,})\s*\/\s*(\d+)/);
+  if (match) {
+    return {
+      orderId: match[1],
+      productId: match[2]
+    };
+  }
   const parts = raw.split("/").map((s) => s.trim());
   return {
     orderId: parts[0] || "",
@@ -92,8 +99,77 @@ function parseOrderAndProduct(str) {
   };
 }
 
+function splitContourPart(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^([КKЭE]\d+)\s*(.*)$/);
+  return {
+    contour: match ? match[1] : "",
+    partKind: match ? match[2].trim() : text
+  };
+}
+
+function parseSuperOknaCsvParts(lines, delimiter) {
+  const parts = [];
+  let currentOrderId = "";
+  let currentProductId = "";
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const cols = splitCsvLine(line, delimiter);
+    const lineText = cols.join(" ");
+    const orderMatch = lineText.match(/\b(\d{3,})\s*\/\s*(\d+)\b/);
+    if (orderMatch) {
+      currentOrderId = orderMatch[1];
+      currentProductId = orderMatch[2];
+      continue;
+    }
+    if (!currentOrderId || !currentProductId) continue;
+
+    const contourCellIndex = cols.findIndex((col) => /^[КKЭE]\d+/.test(String(col || "").trim()));
+    if (contourCellIndex === -1) continue;
+
+    const nameIdx = cols.findIndex((col, idx) => idx > contourCellIndex && isAllowedItem(col));
+    if (nameIdx === -1) continue;
+
+    const orientIdx = cols.findIndex((col, idx) => idx > nameIdx && /вертикаль|горизонталь/i.test(String(col || "")));
+    const sizeIdx = cols.findIndex((col, idx) => idx > nameIdx && /мм/i.test(String(col || "")) && /°/.test(String(col || "")));
+    const qtyIdx = sizeIdx >= 0
+      ? cols.findIndex((col, idx) => idx > sizeIdx && /^\s*\d+\s*$/.test(String(col || "")))
+      : -1;
+    if (sizeIdx === -1 || qtyIdx === -1) continue;
+
+    const contour = splitContourPart(cols[contourCellIndex]);
+    const name = String(cols[nameIdx] || "").trim();
+    const size = String(cols[sizeIdx] || "").trim();
+    const raw = {
+      orderId: currentOrderId,
+      productId: currentProductId,
+      name,
+      lengthMm: parseLengthFromSize(size),
+      angles: extractAngles(size),
+      quantity: parseNumber(cols[qtyIdx]),
+      profileCode: name,
+      position: contour.contour,
+      widthMm: "",
+      heightMm: "",
+      orient: orientIdx >= 0 ? String(cols[orientIdx] || "").trim() : ""
+    };
+
+    const part = createPart(raw);
+    part.id = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    part.contour = contour.contour;
+    part.partKind = contour.partKind;
+    part.sourceRow = line;
+    part.sourceRowIndex = lineIndex + 1;
+    parts.push(part);
+  }
+
+  return parts;
+}
+
 function detectFixedLayout(lines, delimiter) {
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     const cols = splitCsvLine(line, delimiter);
     if (cols.length < 8) continue;
     const article = String(cols[1] || "").trim();
@@ -163,6 +239,9 @@ function parsePartsFromCsv(text) {
   if (!lines.length) return [];
 
   const delimiter = detectDelimiter(lines[0]);
+  const superOknaParts = parseSuperOknaCsvParts(lines, delimiter);
+  if (superOknaParts.length) return superOknaParts;
+
   const layout = detectFixedLayout(lines, delimiter) || {
     article: 0,
     name: 1,
@@ -234,6 +313,8 @@ function parsePartsFromCsv(text) {
 
     const part = createPart(raw);
     part.id = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    part.sourceRow = line;
+    part.sourceRowIndex = lineIndex + 1;
     parts.push(part);
   }
 

@@ -41,7 +41,7 @@ function isAllowedItem(value) {
   const norm = normalizeAllowed(value);
   if (ALLOWED_ITEMS.has(norm)) return true;
   for (const item of ALLOWED_ITEMS) {
-    if (norm.startsWith(item)) return true;
+    if (norm.startsWith(normalizeAllowed(item))) return true;
   }
   return false;
 }
