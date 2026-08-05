@@ -253,7 +253,8 @@ function parsePartsFromCsv(text) {
 
   const parts = [];
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     const cols = splitCsvLine(line, delimiter);
     if (cols.length <= layout.orderPos) continue;
 

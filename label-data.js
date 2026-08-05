@@ -131,6 +131,17 @@ function labelDetailKey(item) {
   ].join("|");
 }
 
+function labelDetailComparisonKey(item) {
+  return [
+    normalizeLabelText(item.orderId),
+    normalizeLabelText(item.productId),
+    normalizedPartKindForDetail(item),
+    normalizedProfileForDetail(item),
+    normalizeLabelOrient(item.orient),
+    normalizeLabelNumber(item.lengthMm)
+  ].join("|");
+}
+
 function detailSignature(items) {
   return (items || [])
     .map(labelDetailKey)
@@ -316,16 +327,31 @@ function buildMissingDetailIssue(source, detail, candidates) {
   return issue;
 }
 
-function countDetailsBySignature(details) {
+function groupDetailsForComparison(details) {
   const map = new Map();
   (details || []).forEach((detail) => {
     const described = describeLabelDetail(detail);
-    const entry = map.get(described.signature) || { count: 0, details: [] };
-    entry.count += 1;
+    const key = labelDetailComparisonKey(detail);
+    const entry = map.get(key) || { key, quantity: 0, details: [] };
+    entry.quantity += described.quantity;
     entry.details.push(described);
-    map.set(described.signature, entry);
+    map.set(key, entry);
   });
   return map;
+}
+
+function buildQuantityMismatchIssue(cutEntry, pdfEntry) {
+  const cutDetail = { ...cutEntry.details[0], quantity: cutEntry.quantity, signature: cutEntry.key };
+  const pdfDetail = { ...pdfEntry.details[0], quantity: pdfEntry.quantity, signature: pdfEntry.key };
+  const issue = {
+    source: "cut",
+    detail: cutDetail,
+    closest: pdfDetail,
+    fieldDiffs: ["количество"],
+    signature: cutEntry.key
+  };
+  issue.message = `Количество группы не совпадает: ${cutDetail.orderId}/${cutDetail.productId}; ${cutDetail.partKind}; ${cutDetail.profile}; ${cutDetail.orient}; ${cutDetail.lengthMm} мм. CSV ${cutEntry.quantity}, PDF ${pdfEntry.quantity}.`;
+  return issue;
 }
 
 function compareCutToPdf(cutPosition, pdfPosition) {
@@ -335,8 +361,8 @@ function compareCutToPdf(cutPosition, pdfPosition) {
 
   const warnings = [];
   const issues = [];
-  const cutKeys = countDetailsBySignature(cutPosition.details);
-  const pdfKeys = countDetailsBySignature(pdfPosition.details);
+  const cutKeys = groupDetailsForComparison(cutPosition.details);
+  const pdfKeys = groupDetailsForComparison(pdfPosition.details);
   const cutDetails = Array.from(cutKeys.values()).flatMap((entry) => entry.details);
   const pdfDetails = Array.from(pdfKeys.values()).flatMap((entry) => entry.details);
 
@@ -351,9 +377,17 @@ function compareCutToPdf(cutPosition, pdfPosition) {
       });
       return;
     }
-    if (pdfEntry.count !== entry.count) {
+    const cutQuantities = entry.details.map((detail) => detail.quantity).sort((a, b) => a - b);
+    const pdfQuantities = pdfEntry.details.map((detail) => detail.quantity).sort((a, b) => a - b);
+    const rowsPairExactly = cutQuantities.length === pdfQuantities.length && cutQuantities.every((quantity, index) => quantity === pdfQuantities[index]);
+    if (entry.details.length > 1 && !rowsPairExactly) {
       ambiguous = true;
-      warnings.push(`Неодинаковое число одинаковых строк: ${entry.details[0].raw}; CSV ${entry.count}, PDF ${pdfEntry.count}.`);
+      warnings.push(`Несколько строк CSV имеют один ключ сопоставления: ${entry.details[0].raw}; строк ${entry.details.length}.`);
+    }
+    if (pdfEntry.quantity !== entry.quantity) {
+      const issue = buildQuantityMismatchIssue(entry, pdfEntry);
+      issues.push(issue);
+      warnings.push(issue.message);
     }
   });
   pdfKeys.forEach((entry, key) => {
@@ -366,7 +400,6 @@ function compareCutToPdf(cutPosition, pdfPosition) {
       });
       return;
     }
-    if (cutEntry.count !== entry.count) ambiguous = true;
   });
 
   return {
@@ -470,34 +503,71 @@ function physicalLabelId(parts) {
 }
 
 function detailMatchKey(detail) {
-  return labelDetailKey(detail);
+  return labelDetailComparisonKey(detail);
 }
 
 function pairCutPdfDetails(cutPosition, pdfPosition) {
+  const cutByKey = new Map();
+  (cutPosition?.details || []).forEach((detail, index) => {
+    const key = detailMatchKey(detail);
+    if (!cutByKey.has(key)) cutByKey.set(key, []);
+    cutByKey.get(key).push({ detail, index, remaining: normalizeLabelNumber(detail.quantity) });
+  });
+
   const pdfByKey = new Map();
   (pdfPosition?.details || []).forEach((detail, index) => {
     const key = detailMatchKey(detail);
     if (!pdfByKey.has(key)) pdfByKey.set(key, []);
-    pdfByKey.get(key).push({ detail, index });
+    pdfByKey.get(key).push({ detail, index, quantity: normalizeLabelNumber(detail.quantity) });
   });
 
   const pairs = [];
   const errors = [];
-  (cutPosition?.details || []).forEach((cutDetail, cutIndex) => {
-    const key = detailMatchKey(cutDetail);
-    const bucket = pdfByKey.get(key) || [];
-    const pdfMatch = bucket.shift();
-    if (!pdfMatch) {
-      errors.push(`Не найдена PDF-строка для ${describeLabelDetail(cutDetail).raw}`);
+  cutByKey.forEach((cutEntries, key) => {
+    const pdfEntries = pdfByKey.get(key) || [];
+    if (!pdfEntries.length) {
+      cutEntries.forEach((entry) => errors.push(`Не найдена PDF-строка для ${describeLabelDetail(entry.detail).raw}`));
       return;
     }
-    pairs.push({
-      key,
-      cutDetail,
-      pdfDetail: pdfMatch.detail,
-      cutIndex,
-      pdfIndex: pdfMatch.index
+
+    let cutCursor = 0;
+    pdfEntries.forEach((pdfEntry) => {
+      let pdfRemaining = pdfEntry.quantity;
+      while (pdfRemaining > 0 && cutCursor < cutEntries.length) {
+        const cutEntry = cutEntries[cutCursor];
+        if (cutEntry.remaining <= 0) {
+          cutCursor += 1;
+          continue;
+        }
+        const matchedQuantity = Math.min(cutEntry.remaining, pdfRemaining);
+        const sourceQuantity = normalizeLabelNumber(cutEntry.detail.quantity);
+        const sourceUnitStart = sourceQuantity - cutEntry.remaining + 1;
+        pairs.push({
+          key,
+          cutDetail: cutEntry.detail,
+          pdfDetail: pdfEntry.detail,
+          cutIndex: cutEntry.index,
+          pdfIndex: pdfEntry.index,
+          matchedQuantity,
+          sourceUnitStart
+        });
+        cutEntry.remaining -= matchedQuantity;
+        pdfRemaining -= matchedQuantity;
+      }
+      if (pdfRemaining > 0) {
+        errors.push(`Количество PDF превышает CSV для ${describeLabelDetail(pdfEntry.detail).raw}: не распределено ${pdfRemaining}.`);
+      }
     });
+
+    const cutRemaining = cutEntries.reduce((sum, entry) => sum + entry.remaining, 0);
+    if (cutRemaining > 0) {
+      errors.push(`Количество CSV превышает PDF для ${describeLabelDetail(cutEntries[0].detail).raw}: не распределено ${cutRemaining}.`);
+    }
+  });
+
+  pdfByKey.forEach((pdfEntries, key) => {
+    if (cutByKey.has(key)) return;
+    pdfEntries.forEach((entry) => errors.push(`Не найдена CSV-строка для ${describeLabelDetail(entry.detail).raw}`));
   });
   return { pairs, errors };
 }
@@ -530,9 +600,10 @@ function groupPhysicalRows(pairs) {
 function repeatPhysicalUnits(rows) {
   const units = [];
   (rows || []).forEach((row, rowIndex) => {
-    const quantity = normalizeLabelNumber(row.cutDetail.quantity);
+    const quantity = normalizeLabelNumber(row.matchedQuantity ?? row.cutDetail.quantity);
+    const sourceUnitStart = normalizeLabelNumber(row.sourceUnitStart) || 1;
     for (let i = 1; i <= quantity; i++) {
-      units.push({ row, rowIndex, unitNo: i });
+      units.push({ row, rowIndex, unitNo: i, sourceUnitNo: sourceUnitStart + i - 1 });
     }
   });
   return units;
@@ -628,7 +699,7 @@ function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimen
     instanceNo,
     instanceTotal,
     sourcePartId: normalizeLabelText(cutDetail.sourcePartId),
-    sourceUnitNo: unit.unitNo,
+    sourceUnitNo: unit.sourceUnitNo || unit.unitNo,
     sketch,
     csvSource: {
       file: cutDetail.sourceFile || "",
@@ -774,15 +845,21 @@ function labelIdFromPiece(piece) {
   return normalizeLabelText(piece?.labelId || piece?.physicalLabel?.id);
 }
 
-function collectQueueLabel(labelIds, labelsById, used) {
-  return (labelIds || [])
-    .map((labelId) => {
-      const id = normalizeLabelText(labelId);
-      if (!id) return null;
-      used.set(id, (used.get(id) || 0) + 1);
-      return labelsById.get(id) || { id };
-    })
-    .filter(Boolean);
+function claimQueueLabels(labelIds, labelsById, used, duplicateClaims) {
+  const claimedIds = [];
+  const labels = [];
+  (labelIds || []).forEach((labelId) => {
+    const id = normalizeLabelText(labelId);
+    if (!id) return;
+    if (used.has(id)) {
+      duplicateClaims.add(id);
+      return;
+    }
+    used.add(id);
+    claimedIds.push(id);
+    labels.push(labelsById.get(id) || { id });
+  });
+  return { labelIds: claimedIds, labels };
 }
 
 function buildLabelQueuesFromOptimizeState(input = {}) {
@@ -792,7 +869,8 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
   const manualGroups = input.manualGroups || [];
   const excludedLabelCount = Number(input.excludedLabelCount || 0);
   const labelsById = new Map(physicalLabels.map((label) => [label.id, label]));
-  const used = new Map();
+  const used = new Set();
+  const duplicateClaims = new Set();
   const auto = [];
   const manual = [];
   const cyclesWithoutLabels = [];
@@ -817,8 +895,10 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
       };
       (bin.parts || []).forEach((part, partIndex) => {
         const metaArr = Array.isArray(part.meta) ? part.meta : [part.meta];
-        const labelIds = metaArr.map(labelIdFromPiece).filter(Boolean);
-        const labels = collectQueueLabel(labelIds, labelsById, used);
+        const candidates = metaArr.map(labelIdFromPiece).filter(Boolean);
+        const claimed = claimQueueLabels(candidates, labelsById, used, duplicateClaims);
+        const labelIds = claimed.labelIds;
+        const labels = claimed.labels;
         const requiredLabels = mode === "double" ? 2 : 1;
         const cycle = {
           profile,
@@ -846,24 +926,23 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
   let manualNo = 1;
   manualGroups.forEach((group) => {
     (group.pieces || []).forEach((piece) => {
-      const labelId = labelIdFromPiece(piece);
-      const labels = collectQueueLabel(labelId ? [labelId] : [], labelsById, used);
+      const candidate = labelIdFromPiece(piece);
+      const claimed = claimQueueLabels(candidate ? [candidate] : [], labelsById, used, duplicateClaims);
+      const labelId = claimed.labelIds[0] || "";
       manual.push({
         no: manualNo,
         reason: group.reason || piece.manualReason || "",
         profile: group.title || piece.title || "",
         lengthMm: normalizeLabelNumber(piece.lengthMm || piece.length),
         labelId,
-        label: labels[0] || null
+        label: claimed.labels[0] || null
       });
       manualNo += 1;
     });
   });
 
-  const duplicateLabelIds = Array.from(used.entries())
-    .filter(([, count]) => count > 1)
-    .map(([id]) => id);
-  const usedIds = new Set(used.keys());
+  const duplicateLabelIds = Array.from(duplicateClaims);
+  const usedIds = used;
   const lostLabelIds = physicalLabels
     .map((label) => label.id)
     .filter((id) => !usedIds.has(id));
@@ -904,6 +983,46 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
   };
 }
 
+function buildJobPrintSequence(queue) {
+  const entries = [];
+  let printIndex = 1;
+  let printRowIndex = 0;
+
+  (queue?.auto || []).forEach((profile, profileIndex) => {
+    (profile.bars || []).forEach((bar) => {
+      (bar.cycles || []).forEach((cycle) => {
+        const mode = cycle.mode === "double" ? "double" : "single";
+        const requiredLabels = mode === "double" ? 2 : 1;
+        const labels = cycle.labels || [];
+        const labelIds = cycle.labelIds || [];
+
+        for (let slotIndex = 0; slotIndex < requiredLabels; slotIndex++) {
+          const label = labels[slotIndex] || null;
+          const labelId = normalizeLabelText(labelIds[slotIndex] || label?.id);
+          if (!label || !labelId) continue;
+          entries.push({
+            printIndex,
+            profileIndex: profileIndex + 1,
+            profile: profile.profile || "",
+            sheetIndex: bar.barNo,
+            cycleIndex: cycle.cycleNo,
+            slot: mode === "double" ? (slotIndex === 0 ? "A" : "B") : "single",
+            labelId,
+            side: normalizeLabelText(label.side),
+            lengthMm: normalizeLabelNumber(label.lengthMm || cycle.lengthMm),
+            label,
+            gridCellIndex: printRowIndex * 2 + slotIndex
+          });
+          printIndex += 1;
+        }
+        printRowIndex += 1;
+      });
+    });
+  });
+
+  return entries;
+}
+
 window.LabelData = {
   LABEL_STATUS,
   LABEL_RULES,
@@ -932,5 +1051,6 @@ window.LabelData = {
   compareCutToPdf,
   buildLabelKitReview,
   buildPhysicalLabelsForReviewRows,
-  buildLabelQueuesFromOptimizeState
+  buildLabelQueuesFromOptimizeState,
+  buildJobPrintSequence
 };

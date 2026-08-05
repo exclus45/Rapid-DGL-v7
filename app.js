@@ -4,9 +4,10 @@ appEl.innerHTML = `
   <div class="tabs">
     <button class="tab-btn active" data-tab="import">Импорт</button>
     <button class="tab-btn" data-tab="check">Проверка комплекта</button>
-    <button class="tab-btn" data-tab="labels">Этикетки</button>
     <button class="tab-btn" data-tab="optimize">Оптимизация</button>
-    <button class="tab-btn" data-tab="export">Экспорт</button>
+    <button class="tab-btn" data-tab="export">Экспорт на пилу</button>
+    <button class="tab-btn" data-tab="murat">Экспорт на станок</button>
+    <button class="tab-btn" data-tab="labels">Этикетки</button>
   </div>
 
   <div class="tab-panel active" id="tab-import">
@@ -45,6 +46,10 @@ appEl.innerHTML = `
       <h2 class="center-heading">Этикетки</h2>
       <div class="label-print-controls">
         <button id="testPrintLabelsBtn" class="btn-secondary" type="button" disabled>Пробная печать A4</button>
+        <label class="label-print-option">
+          <input id="labelPrintBorders" type="checkbox" checked />
+          Границы ячеек
+        </label>
       </div>
       <div id="labelsSummary" class="label-summary"></div>
       <div id="labelsPreview"></div>
@@ -80,6 +85,17 @@ appEl.innerHTML = `
       <div id="exportBlocks"><small>Нет данных</small></div>
     </div>
   </div>
+
+  <div class="tab-panel" id="tab-murat">
+    <div class="card">
+      <h2>Экспорт на станок MURAT KD-658</h2>
+      <p>Здесь отображаются свариваемые контуры для станка MURAT KD-658.</p>
+      <div class="opt-controls">
+        <button id="refreshMuratBtn" class="btn-secondary" type="button">Обновить список</button>
+      </div>
+      <div id="muratTableWrap"><small>Сначала выполните проверку комплекта.</small></div>
+    </div>
+  </div>
 `;
 
 const tableWrap = document.getElementById("tableWrap");
@@ -104,21 +120,26 @@ const labelReview = document.getElementById("labelReview");
 const labelsSummary = document.getElementById("labelsSummary");
 const labelsPreview = document.getElementById("labelsPreview");
 const testPrintLabelsBtn = document.getElementById("testPrintLabelsBtn");
+const labelPrintBorders = document.getElementById("labelPrintBorders");
 const labelTestPrintSheet = document.getElementById("labelTestPrintSheet");
+const refreshMuratBtn = document.getElementById("refreshMuratBtn");
+const muratTableWrap = document.getElementById("muratTableWrap");
 
 const DEFAULT_STOCK = 6500;
 const DEFAULT_KERF = 5;
 const DEFAULT_MODE = "double";
+const DEFAULT_SCRAP_MAX = 70;
+const SHOW_LABEL_BARCODE = false;
 const PROFILE_BAD_LEFTOVER_RULES = {
-  S35801: { scrapMax: 50, minUsefulLeftover: 650 },
-  XS35801: { scrapMax: 50, minUsefulLeftover: 650 },
-  S35816: { scrapMax: 50, minUsefulLeftover: 650 },
-  S57111: { scrapMax: 50, minUsefulLeftover: 650 },
-  S67011: { scrapMax: 50, minUsefulLeftover: 650 },
-  S35802: { scrapMax: 50, minUsefulLeftover: 550 },
-  S57122: { scrapMax: 50, minUsefulLeftover: 550 },
-  S67002: { scrapMax: 50, minUsefulLeftover: 550 },
-  XS35802: { scrapMax: 50, minUsefulLeftover: 550 }
+  S35801: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
+  XS35801: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
+  S35816: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
+  S57111: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
+  S67011: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
+  S35802: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 550 },
+  S57122: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 550 },
+  S67002: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 550 },
+  XS35802: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 550 }
 };
 const EXPORT_ORDER_NO = 1;
 const EXPORT_CUT_NO = 1;
@@ -137,6 +158,7 @@ const excludedLabelPositions = new Set();
 const labelDecisions = new Map();
 let lastLabelReview = { rows: [], summary: {} };
 let lastPhysicalLabels = { labels: [], errors: [], byPosition: new Map(), summary: { total: 0, positions: 0 } };
+let lastMuratRecords = [];
 let lastLabelQueues = null;
 let labelPreviewMode = "logical";
 let exportCache = [];
@@ -651,64 +673,129 @@ function renderLabelsPreview() {
   `).join("");
 }
 
-function getTestPrintLabels(limit = 4) {
-  const labels = lastPhysicalLabels.labels || [];
-  const selected = [];
-  const usedPositions = new Set();
-  labels.forEach((label) => {
-    if (selected.length >= limit) return;
-    const key = label.positionKey || LabelData.labelPositionKey(label.orderId, label.productId);
-    if (!key || usedPositions.has(key)) return;
-    usedPositions.add(key);
-    selected.push(label);
-  });
-  return selected;
+function getJobPrintEntries(limit = Infinity) {
+  const entries = LabelData.buildJobPrintSequence(lastLabelQueues);
+  if (!Number.isFinite(limit)) return entries;
+  return entries.slice(0, Math.max(0, limit));
 }
 
 function updateTestPrintButton() {
   if (!testPrintLabelsBtn) return;
-  const available = getTestPrintLabels(1).length > 0;
+  const available = Boolean(lastLabelQueues?.validation?.ready && getJobPrintEntries(1).length > 0);
   testPrintLabelsBtn.disabled = !available;
-  testPrintLabelsBtn.title = available ? "" : "Сначала сформируйте этикетки";
+  testPrintLabelsBtn.title = available ? "" : "Сначала сформируйте готовую очередь после оптимизации";
 }
 
-function renderTestPrintSheet(labels) {
+function renderTestPrintSheet(entries, options = {}) {
   if (!labelTestPrintSheet) return;
-  const items = (labels || []).map((label) => `
-    <div class="label-test-print-item">
-      ${renderLabelCard(label)}
-    </div>
-  `).join("");
-  labelTestPrintSheet.innerHTML = `
-    <div class="label-test-page">
-      <div class="label-test-title">Пробная печать этикеток 100×50 мм</div>
-      <div class="label-test-list">${items}</div>
-      <div class="label-control-wrap">
-        <div class="label-control-frame"></div>
-        <div class="label-control-caption">Контрольный размер 100×50 мм — проверить линейкой</div>
-      </div>
-    </div>
-  `;
+  const sourceEntries = entries || [];
+  const entriesByCell = new Map(sourceEntries.map((entry) => [entry.gridCellIndex, entry]));
+  const lastCellIndex = sourceEntries.reduce((max, entry) => Math.max(max, entry.gridCellIndex), -1);
+  const pageCount = Math.max(1, Math.ceil((lastCellIndex + 1) / 16));
+  const pages = [];
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    const cells = [];
+    for (let cellIndex = 0; cellIndex < 16; cellIndex++) {
+      const entry = entriesByCell.get(pageIndex * 16 + cellIndex);
+      cells.push(`
+        <div class="label-test-cell">
+          ${entry?.label ? renderLabelCard(entry.label) : ""}
+        </div>
+      `);
+    }
+    pages.push(`<div class="label-test-page">${cells.join("")}</div>`);
+  }
+  labelTestPrintSheet.classList.toggle("label-test-sheet--no-borders", options.showBorders === false);
+  labelTestPrintSheet.innerHTML = pages.join("");
 }
 
-function printTestLabelsA4() {
-  const labels = getTestPrintLabels(4);
-  if (!labels.length) return;
-  const message = [
-    "В окне печати выберите:",
-    "— масштаб 100% или Фактический размер;",
-    "— не использовать “Вписать в страницу”;",
-    "— поля: по умолчанию или нет;",
-    "— после печати измерьте контрольную рамку линейкой."
-  ].join("\n");
+function logPrintQueueDiagnostics(entries) {
+  console.table((entries || []).map((entry) => ({
+    printIndex: entry.printIndex,
+    sheetIndex: entry.sheetIndex,
+    cycleIndex: entry.cycleIndex,
+    slot: entry.slot,
+    labelId: entry.labelId,
+    side: entry.side,
+    length: entry.lengthMm
+  })));
+}
+
+async function waitForTestPrintImages(timeoutMs = 15000) {
+  const images = Array.from(labelTestPrintSheet?.querySelectorAll(".label-card-sketch-img") || []);
+  const waitForImage = async (image) => {
+    if (!image.complete) {
+      await new Promise((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        image.addEventListener("load", finish, { once: true });
+        image.addEventListener("error", finish, { once: true });
+      });
+    }
+    if (typeof image.decode === "function" && image.naturalWidth > 0) {
+      try {
+        await image.decode();
+      } catch (_) {
+        // A failed decode is reported below and must not block the print dialog.
+      }
+    }
+    return image.complete && image.naturalWidth > 0;
+  };
+
+  const results = await Promise.all(images.map(waitForImage));
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const ready = results.filter(Boolean).length;
+  console.info(`Эскизы перед печатью: ${ready}/${images.length} готовы.`);
+  if (ready !== images.length) {
+    console.warn(`Не удалось подготовить эскизы: ${images.length - ready}.`);
+  }
+  return { total: images.length, ready, failed: images.length - ready };
+}
+
+function clearTestPrintTextFit() {
+  labelTestPrintSheet
+    ?.querySelectorAll(".label-card-order, .label-card-main, .label-card-sub")
+    .forEach((element) => element.style.removeProperty("font-size"));
+}
+
+function fitTestPrintText() {
+  if (!document.body.classList.contains("label-test-print")) return;
+  clearTestPrintTextFit();
+  labelTestPrintSheet
+    ?.querySelectorAll(".label-card-order, .label-card-main, .label-card-sub")
+    .forEach((element) => {
+      const availableWidth = element.clientWidth;
+      const requiredWidth = element.scrollWidth;
+      if (availableWidth <= 0 || requiredWidth <= availableWidth) return;
+
+      const currentSize = Number.parseFloat(window.getComputedStyle(element).fontSize);
+      if (!Number.isFinite(currentSize)) return;
+      element.style.fontSize = `${currentSize * availableWidth / requiredWidth * 0.98}px`;
+    });
+}
+
+async function printTestLabelsA4() {
+  const entries = getJobPrintEntries();
+  if (!entries.length) return;
+  const message = "Выберите принтер и нажмите “Печать”. Макет уже подготовлен под лист A4";
   if (!window.confirm(message)) return;
-  renderTestPrintSheet(labels);
+  logPrintQueueDiagnostics(entries);
+  renderTestPrintSheet(entries, { showBorders: labelPrintBorders?.checked !== false });
+  await waitForTestPrintImages();
+  clearTestPrintTextFit();
   document.body.classList.add("label-test-print");
   window.print();
   setTimeout(() => {
     document.body.classList.remove("label-test-print");
+    clearTestPrintTextFit();
   }, 250);
 }
+
+window.addEventListener("beforeprint", fitTestPrintText);
+window.addEventListener("afterprint", clearTestPrintTextFit);
 
 function renderLabelQueuePreview(queue) {
   const validation = queue.validation || {};
@@ -799,6 +886,49 @@ function displayPartKind(value) {
   return String(value || "").toUpperCase();
 }
 
+function normalizeMuratContour(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/^K/, "К")
+    .replace(/^E/, "Э");
+}
+
+function muratRecordMatchKey(orderId, productId, contour) {
+  return `${String(orderId || "").trim()}|${String(productId || "").trim()}|${normalizeMuratContour(contour)}`;
+}
+
+function muratRecordForLabel(label) {
+  const key = muratRecordMatchKey(label.orderId, label.productId, label.contour);
+  return lastMuratRecords.find((record) => record.matchKey === key) || null;
+}
+
+function renderMuratBarcodeSvg(value) {
+  if (!window.JsBarcode) return "";
+
+  const text = String(value);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  window.JsBarcode(svg, text, {
+    format: "CODE128",
+    displayValue: true,
+    margin: 6,
+    height: 45,
+    width: 2,
+    background: "#ffffff",
+    lineColor: "#000000"
+  });
+
+  const width = Number.parseFloat(svg.getAttribute("width"));
+  const height = Number.parseFloat(svg.getAttribute("height"));
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  }
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Code 128: ${text}`);
+  return svg.outerHTML;
+}
+
 function renderLabelCard(label) {
   const sketchUrl = label.sketch?.croppedDataUrl || label.sketch?.dataUrl || "";
   const sketch = sketchUrl
@@ -807,13 +937,28 @@ function renderLabelCard(label) {
   const dimension = label.dimension
     ? `${label.dimension.widthMm} × ${label.dimension.heightMm} мм`
     : "—";
+  const muratRecord = muratRecordForLabel(label);
+  const muratBarcode = muratRecord ? renderMuratBarcodeSvg(String(muratRecord.dataRec)) : "";
+  const muratBlock = SHOW_LABEL_BARCODE && muratBarcode
+    ? `
+      <div class="label-murat-block">
+        <div class="label-murat-barcode">${muratBarcode}</div>
+      </div>
+    `
+    : "";
+  const textClasses = [
+    "label-card-text",
+    muratRecord ? "label-card-text--murat" : "",
+    muratRecord && !SHOW_LABEL_BARCODE ? "label-card-text--murat-no-barcode" : ""
+  ].filter(Boolean).join(" ");
   return `
     <article class="label-card" data-label-id="${escapeHtml(label.id)}">
-      <div class="label-card-text">
+      <div class="${textClasses}">
         <div class="label-card-order">${escapeHtml(label.orderId)}/${escapeHtml(label.productId)}</div>
         <div class="label-card-main">${displayPartKind(label.partKind)} • ${escapeHtml(label.side)} • ${label.lengthMm} мм</div>
         <div class="label-card-sub">${escapeHtml(label.reinforcementText || "АРМ.")}</div>
         <div class="label-card-sub">ГАБАРИТ: ${escapeHtml(dimension)}</div>
+        ${muratBlock}
       </div>
       <div class="label-card-divider"></div>
       <div class="label-card-sketch">${sketch}</div>
@@ -847,6 +992,7 @@ function renderLabelKitCheck() {
   );
   lastLabelReview = review;
   lastPhysicalLabels = LabelData.buildPhysicalLabelsForReviewRows(review.rows);
+  renderMuratPositions();
   renderLabelsPreview();
 
   labelSummary.innerHTML = `
@@ -1202,13 +1348,252 @@ clearBtn.addEventListener("click", () => {
   renderLabelKitCheck();
 });
 
+function formatMuratDecimal(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return number.toFixed(7).replace(".", ",");
+}
+
+function buildReceteCsv(records) {
+  const dataHeaders = records.map((_, index) => `Data_${index + 1}`);
+  const rows = [
+    "List separator=;Decimal symbol=,;;",
+    "Recete Recete Recete Recete Recete ;;;",
+    ["LANGID_41f", ...dataHeaders].join(";"),
+    ["LANGID_409", ...dataHeaders].join(";"),
+    ["LANGID_407", ...dataHeaders].join(";"),
+    ["LANGID_419", ...dataHeaders].join(";"),
+    ["LANGID_c0a", ...dataHeaders].join(";"),
+    ["1", ...records.map((record) => record.dataRec)].join(";"),
+    ["Customer", ...records.map((record) => record.customer)].join(";"),
+    ["BoxNo", ...records.map((record) => record.boxNo)].join(";"),
+    ["ProfilNo", ...records.map((record) => record.profilNo)].join(";"),
+    ["Color Code", ...records.map((record) => record.colorCode)].join(";"),
+    ["X_size", ...records.map((record) => formatMuratDecimal(record.xSize))].join(";"),
+    ["Y_size", ...records.map((record) => formatMuratDecimal(record.ySize))].join(";"),
+    ["Transom", ...records.map((record) => record.transom)].join(";"),
+    ["Quanti", ...records.map((record) => record.quanti)].join(";")
+  ];
+  return rows.join("\r\n") + "\r\n";
+}
+
+function renderMuratPositions() {
+  if (!muratTableWrap) return;
+  const groupsByKey = new Map();
+
+  for (const row of lastLabelReview.rows || []) {
+    const orderId = String(row.orderId || "").trim();
+    const productId = String(row.productId || "").trim();
+    if (!orderId || !productId || row.status !== LabelData.LABEL_STATUS.READY) continue;
+
+    const labels = lastPhysicalLabels.byPosition?.get(row.key) || [];
+    for (const label of labels) {
+      const contour = normalizeMuratContour(label.contour);
+      if (!contour.startsWith("К")) continue;
+
+      const uniqueKey = `${orderId}|${productId}|${contour}`;
+      if (groupsByKey.has(uniqueKey)) continue;
+      groupsByKey.set(uniqueKey, {
+        orderId,
+        productId,
+        contour,
+        partKind: String(label.partKind || "").trim() || "—",
+        dimension: label.dimension || null,
+        quantity: Number(row.pdf?.productQuantity),
+        hasThreshold: (row.pdf?.allDetails || []).some((detail) => (
+          String(detail.orderId || "").trim() === orderId &&
+          String(detail.productId || "").trim() === productId &&
+          normalizeMuratContour(detail.contour || detail.position) === contour &&
+          LabelData.isThresholdDetail(detail)
+        ))
+      });
+    }
+  }
+
+  const typePriority = (value) => {
+    const type = String(value || "").trim().toLowerCase();
+    if (type === "рама") return 0;
+    if (type === "створка") return 1;
+    return 2;
+  };
+
+  const groups = Array.from(groupsByKey.values()).sort((a, b) => {
+    const typeCompare = typePriority(a.partKind) - typePriority(b.partKind);
+    if (typeCompare !== 0) return typeCompare;
+    const orderCompare = a.orderId.localeCompare(b.orderId, "ru", { numeric: true });
+    if (orderCompare !== 0) return orderCompare;
+    const productCompare = a.productId.localeCompare(b.productId, "ru", { numeric: true });
+    if (productCompare !== 0) return productCompare;
+    return a.contour.localeCompare(b.contour, "ru", { numeric: true });
+  });
+
+  const emptyMessage = groups.length
+    ? ""
+    : "<small>Сначала выполните проверку комплекта.</small>";
+
+  const weldGroups = groups.filter((group) => !(group.hasThreshold && typePriority(group.partKind) === 0));
+  const excludedGroups = groups.filter((group) => group.hasThreshold && typePriority(group.partKind) === 0);
+
+  const muratRecords = weldGroups.map((group, index) => ({
+    matchKey: muratRecordMatchKey(group.orderId, group.productId, group.contour),
+    orderPosition: `${group.orderId}/${group.productId}`,
+    contour: group.contour,
+    partKind: group.partKind,
+    dataRec: index + 1,
+    customer: group.orderId,
+    boxNo: group.productId,
+    profilNo: "test58",
+    colorCode: "01",
+    xSize: group.dimension?.widthMm ?? "—",
+    ySize: group.dimension?.heightMm ?? "—",
+    transom: "4294967295",
+    quanti: Number.isFinite(group.quantity) && group.quantity > 0 ? group.quantity : "—"
+  }));
+  lastMuratRecords = muratRecords;
+
+  const contourRows = muratRecords.map((record) => `
+    <tr>
+      <td>${record.dataRec}</td>
+      <td>${escapeHtml(record.orderPosition)}</td>
+      <td>${escapeHtml(record.contour)}</td>
+      <td>${escapeHtml(record.partKind)}</td>
+      <td>${escapeHtml(`${record.xSize} × ${record.ySize}`)}</td>
+      <td>${record.quanti}</td>
+    </tr>
+  `).join("");
+
+  const recordRows = muratRecords.map((record) => `
+    <tr>
+      <td>${escapeHtml(record.orderPosition)}</td>
+      <td>${escapeHtml(record.contour)}</td>
+      <td>${escapeHtml(record.partKind)}</td>
+      <td>${record.dataRec}</td>
+      <td>${escapeHtml(record.customer)}</td>
+      <td>${escapeHtml(record.boxNo)}</td>
+      <td>${escapeHtml(record.profilNo)}</td>
+      <td>${escapeHtml(record.colorCode)}</td>
+      <td>${record.xSize}</td>
+      <td>${record.ySize}</td>
+      <td>${escapeHtml(record.transom)}</td>
+      <td>${record.quanti}</td>
+    </tr>
+  `).join("");
+
+  const excludedRows = excludedGroups.map((group, index) => {
+    const sizeText = group.dimension
+      ? `${group.dimension.widthMm} × ${group.dimension.heightMm}`
+      : "—";
+    const quantityText = Number.isFinite(group.quantity) && group.quantity > 0 ? group.quantity : "—";
+    return `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(`${group.orderId}/${group.productId}`)}</td>
+        <td>${escapeHtml(group.contour)}</td>
+        <td>${escapeHtml(group.partKind)}</td>
+        <td>${escapeHtml(sizeText)}</td>
+        <td>${quantityText}</td>
+        <td>Конструкция с порогом</td>
+      </tr>
+    `;
+  }).join("");
+
+  muratTableWrap.innerHTML = `
+    ${emptyMessage}
+    <section class="murat-section">
+      <h3>Свариваемые контуры</h3>
+      <table class="murat-table murat-table--contours">
+        <thead>
+          <tr>
+            <th>№</th>
+            <th>Заказ/позиция</th>
+            <th>Группа</th>
+            <th>Что свариваем</th>
+            <th>Размер</th>
+            <th>Количество</th>
+          </tr>
+        </thead>
+        <tbody>${contourRows}</tbody>
+      </table>
+    </section>
+    <section class="murat-section">
+      <h3>Не экспортируются на станок</h3>
+      <table class="murat-table murat-table--exceptions">
+        <thead>
+          <tr>
+            <th>№</th>
+            <th>Заказ/позиция</th>
+            <th>Группа</th>
+            <th>Что свариваем</th>
+            <th>Размер</th>
+            <th>Количество</th>
+            <th>Причина</th>
+          </tr>
+        </thead>
+        <tbody>${excludedRows}</tbody>
+      </table>
+    </section>
+    <section class="murat-section">
+      <div class="murat-section-header">
+        <h3>Данные для Recete.csv</h3>
+        <button id="downloadReceteBtn" class="btn-secondary" type="button" ${muratRecords.length ? "" : "disabled"}>Скачать Recete.csv</button>
+      </div>
+      <table class="murat-table">
+        <thead>
+          <tr>
+            <th>Заказ/позиция</th>
+            <th>Группа</th>
+            <th>Что свариваем</th>
+            <th>Data Rec</th>
+            <th>Customer</th>
+            <th>BoxNo</th>
+            <th>ProfilNo</th>
+            <th>Color Code</th>
+            <th>X_size</th>
+            <th>Y_size</th>
+            <th>Transom</th>
+            <th>Quanti</th>
+          </tr>
+        </thead>
+        <tbody>${recordRows}</tbody>
+      </table>
+    </section>
+  `;
+
+  const downloadReceteBtn = document.getElementById("downloadReceteBtn");
+  if (downloadReceteBtn) {
+    downloadReceteBtn.addEventListener("click", () => {
+      if (!muratRecords.length) return;
+      if (muratRecords.length > 500) {
+        window.alert("Количество записей превышает допустимый предел MURAT: 500.");
+        return;
+      }
+
+      const csvText = buildReceteCsv(muratRecords);
+      const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "Recete.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    });
+  }
+}
+
+if (refreshMuratBtn) {
+  refreshMuratBtn.addEventListener("click", renderMuratPositions);
+}
+
 const tabButtons = document.querySelectorAll(".tab-btn");
 const panels = {
   import: document.getElementById("tab-import"),
   check: document.getElementById("tab-check"),
   labels: document.getElementById("tab-labels"),
   optimize: document.getElementById("tab-optimize"),
-  export: document.getElementById("tab-export")
+  export: document.getElementById("tab-export"),
+  murat: document.getElementById("tab-murat")
 };
 
 tabButtons.forEach((btn) => {
@@ -1218,6 +1603,7 @@ tabButtons.forEach((btn) => {
     const tab = btn.getAttribute("data-tab");
     Object.values(panels).forEach((p) => p.classList.remove("active"));
     panels[tab].classList.add("active");
+    if (tab === "murat") renderMuratPositions();
   });
 });
 
@@ -1668,7 +2054,7 @@ function appendDeletedResults() {
   optResults.appendChild(list);
 }
 
-function formatOptimizeResult(result, stock, kerf) {
+function formatOptimizeResult(result, stock, kerf, rules = null) {
   if (!result.bins.length && !result.unfit.length) {
     return "<div class=\"opt-result-sub\">Нет данных для раскроя.</div>";
   }
@@ -1703,7 +2089,10 @@ function formatOptimizeResult(result, stock, kerf) {
       .join("");
     const percent = stock > 0 ? (bin.leftover / stock) * 100 : 0;
     const percentText = `(${percent.toFixed(1)}%)`;
-    const percentClass = bin.leftover <= 50 ? "percent-scrap" : "percent-useful";
+    const scrapMax = Number.isFinite(Number(rules?.scrapMax))
+      ? Number(rules.scrapMax)
+      : DEFAULT_SCRAP_MAX;
+    const percentClass = bin.leftover <= scrapMax ? "percent-scrap" : "percent-useful";
     lines.push(`
       <div class="opt-bin">
         <strong>Хлыст ${idx + 1}:</strong> ${parts}
@@ -1721,13 +2110,13 @@ function formatOptimizeResult(result, stock, kerf) {
   return lines.join("");
 }
 
-function appendOptimizeResult(title, result, stock, kerf, modeLabel = "") {
+function appendOptimizeResult(title, result, stock, kerf, modeLabel = "", rules = null) {
   const modeHtml = modeLabel ? ` <span class="opt-mode-label">${modeLabel}</span>` : "";
   const section = document.createElement("div");
   section.className = "opt-result";
   section.innerHTML = `
     <div class="opt-result-title">${title}${modeHtml}</div>
-    ${formatOptimizeResult(result, stock, kerf)}
+    ${formatOptimizeResult(result, stock, kerf, rules)}
   `;
   optResults.appendChild(section);
 }
@@ -2165,7 +2554,7 @@ optimizeBtn.addEventListener("click", () => {
       const result = splitPairedBins(baseResult);
       optimizeCache.lastResults.set(group.title, result);
       optimizeCache.lastExportResults.set(group.title, baseResult);
-      appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel);
+      appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
       return;
     }
 
@@ -2173,7 +2562,7 @@ optimizeBtn.addEventListener("click", () => {
     const result = window.optimizeCut(singleItems, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
     optimizeCache.lastResults.set(group.title, result);
     optimizeCache.lastExportResults.set(group.title, result);
-    appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel);
+    appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
   });
 
   const byTitleMap = new Map();
@@ -2201,7 +2590,7 @@ optimizeBtn.addEventListener("click", () => {
     const items = pieces.map((p) => ({ lengthMm: p.lengthMm, qty: 1, meta: p }));
     const optimizeRules = getOptimizeRulesForPieces(pieces);
     const result = window.optimizeCut(items, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
-    appendOptimizeResult(`${title}`, result, DEFAULT_STOCK, DEFAULT_KERF, "Одинарный");
+    appendOptimizeResult(`${title}`, result, DEFAULT_STOCK, DEFAULT_KERF, "Одинарный", optimizeRules);
   });
 
   appendDeletedResults();

@@ -865,6 +865,101 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   box-sizing: border-box;
 }
 
+#muratTableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.murat-table {
+  min-width: 1400px;
+}
+
+.murat-table th,
+.murat-table td {
+  white-space: nowrap;
+}
+
+.murat-table th:nth-child(1),
+.murat-table td:nth-child(1) { width: 11%; }
+.murat-table th:nth-child(2),
+.murat-table td:nth-child(2) { width: 7%; }
+.murat-table th:nth-child(3),
+.murat-table td:nth-child(3) { width: 12%; }
+.murat-table th:nth-child(4),
+.murat-table td:nth-child(4) { width: 7%; }
+.murat-table th:nth-child(5),
+.murat-table td:nth-child(5) { width: 8%; }
+.murat-table th:nth-child(6),
+.murat-table td:nth-child(6) { width: 7%; }
+.murat-table th:nth-child(7),
+.murat-table td:nth-child(7) { width: 9%; }
+.murat-table th:nth-child(8),
+.murat-table td:nth-child(8) { width: 8%; }
+.murat-table th:nth-child(9),
+.murat-table td:nth-child(9) { width: 8%; }
+.murat-table th:nth-child(10),
+.murat-table td:nth-child(10) { width: 8%; }
+.murat-table th:nth-child(11),
+.murat-table td:nth-child(11) { width: 10%; }
+.murat-table th:nth-child(12),
+.murat-table td:nth-child(12) { width: 5%; }
+
+.murat-table--contours {
+  min-width: 760px;
+}
+
+.murat-table--contours th:nth-child(1),
+.murat-table--contours td:nth-child(1) { width: 7%; }
+.murat-table--contours th:nth-child(2),
+.murat-table--contours td:nth-child(2) { width: 18%; }
+.murat-table--contours th:nth-child(3),
+.murat-table--contours td:nth-child(3) { width: 10%; }
+.murat-table--contours th:nth-child(4),
+.murat-table--contours td:nth-child(4) { width: 25%; }
+.murat-table--contours th:nth-child(5),
+.murat-table--contours td:nth-child(5) { width: 25%; }
+.murat-table--contours th:nth-child(6),
+.murat-table--contours td:nth-child(6) { width: 15%; }
+
+.murat-section + .murat-section {
+  margin-top: 24px;
+}
+
+.murat-section h3 {
+  margin: 0 0 8px;
+}
+
+.murat-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.murat-section-header h3 {
+  margin: 0;
+}
+
+.murat-table--exceptions {
+  min-width: 900px;
+}
+
+.murat-table--exceptions th:nth-child(1),
+.murat-table--exceptions td:nth-child(1) { width: 6%; }
+.murat-table--exceptions th:nth-child(2),
+.murat-table--exceptions td:nth-child(2) { width: 15%; }
+.murat-table--exceptions th:nth-child(3),
+.murat-table--exceptions td:nth-child(3) { width: 9%; }
+.murat-table--exceptions th:nth-child(4),
+.murat-table--exceptions td:nth-child(4) { width: 18%; }
+.murat-table--exceptions th:nth-child(5),
+.murat-table--exceptions td:nth-child(5) { width: 18%; }
+.murat-table--exceptions th:nth-child(6),
+.murat-table--exceptions td:nth-child(6) { width: 12%; }
+.murat-table--exceptions th:nth-child(7),
+.murat-table--exceptions td:nth-child(7) { width: 22%; }
+
 .label-summary {
   margin-bottom: 12px;
 }
@@ -1048,6 +1143,16 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   min-width: 0;
 }
 
+.label-card-text--murat {
+  grid-template-rows: auto auto auto auto minmax(38px, 1fr);
+  gap: 2px;
+}
+
+.label-card-text--murat-no-barcode {
+  grid-template-rows: repeat(4, 1fr);
+  gap: 0;
+}
+
 .label-card-order {
   font-size: 22px;
   line-height: 1;
@@ -1071,6 +1176,30 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.label-murat-block {
+  align-self: end;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  background: #fff;
+}
+
+.label-murat-barcode {
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  background: #fff;
+}
+
+.label-murat-barcode svg {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  fill: #000;
 }
 
 .label-card-divider {
@@ -1245,8 +1374,20 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
 
 .label-print-controls {
   display: flex;
+  align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
   margin: 0 0 12px;
+}
+
+.label-print-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .label-test-sheet {
@@ -1254,41 +1395,30 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
 }
 
 .label-test-page {
-  width: 190mm;
+  width: 210mm;
+  height: 297mm;
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(2, 105mm);
+  grid-template-rows: repeat(8, 37.125mm);
+  gap: 0;
+  overflow: hidden;
   color: #000;
   background: #fff;
 }
 
-.label-test-title {
-  margin: 0 0 3mm;
-  font-size: 10pt;
-  font-weight: 700;
-}
-
-.label-test-print-item {
-  margin: 0 0 3mm;
-  page-break-inside: avoid;
-  break-inside: avoid;
-}
-
-.label-control-wrap {
-  margin-top: 0;
-  page-break-inside: avoid;
-  break-inside: avoid;
-}
-
-.label-control-frame {
-  width: 100mm;
-  height: 50mm;
+.label-test-cell {
+  width: 105mm;
+  height: 37.125mm;
   box-sizing: border-box;
-  border: 0.2mm solid #000;
+  border: 0.15mm solid rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  page-break-inside: avoid;
+  break-inside: avoid;
 }
 
-.label-control-caption {
-  margin-top: 1mm;
-  font-size: 8pt;
-  color: #000;
+.label-test-sheet--no-borders .label-test-cell {
+  border-color: transparent;
 }
 
 @media (max-width: 1180px) {
@@ -1300,13 +1430,17 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
 @media print {
   @page {
     size: A4 portrait;
-    margin: 10mm;
+    margin: 0;
   }
 
   body.label-test-print,
   body.label-test-print * {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+
+  body.label-test-print {
+    margin: 0 !important;
   }
 
   body.label-test-print * {
@@ -1329,23 +1463,65 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
     display: block !important;
     position: absolute;
     inset: 0 auto auto 0;
-    width: 190mm;
+    width: 210mm;
     margin: 0;
     padding: 0;
     background: #fff;
     box-shadow: none;
   }
 
+  body.label-test-print .label-test-page {
+    width: 210mm;
+    height: 297mm;
+    display: grid;
+    grid-template-columns: repeat(2, 105mm);
+    grid-template-rows: repeat(8, 37.125mm);
+    gap: 0;
+    overflow: hidden;
+    transform: translateY(2mm);
+    break-after: page;
+    page-break-after: always;
+  }
+
+  body.label-test-print .label-test-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  body.label-test-print .label-test-cell {
+    width: 105mm;
+    height: 37.125mm;
+    box-sizing: border-box;
+    border: 0.15mm solid rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+  }
+
+  body.label-test-print .label-test-cell:nth-child(2n + 1) {
+    padding-left: 4mm;
+  }
+
+  body.label-test-print .label-test-cell:nth-child(-n + 2) {
+    padding-top: 4mm;
+  }
+
+  body.label-test-print .label-test-cell:nth-child(n + 15) {
+    padding-bottom: 4mm;
+  }
+
+  body.label-test-print .label-test-sheet--no-borders .label-test-cell {
+    border-color: transparent;
+  }
+
   body.label-test-print .label-card {
-    width: 100mm;
-    height: 50mm;
+    width: 100%;
+    height: 100%;
     max-width: none;
     aspect-ratio: auto;
     box-sizing: border-box;
     display: grid;
-    grid-template-columns: minmax(0, 45%) 1px minmax(0, 55%);
-    gap: 1.6mm;
-    padding: 2.5mm 0 2.5mm 2.5mm;
+    grid-template-columns: minmax(0, 1fr) 0.15mm minmax(0, 1fr);
+    gap: 0.3mm;
+    padding: 0.7mm 0.5mm 0.7mm 0.8mm;
     overflow: hidden;
     background: #fff;
     color: #000;
@@ -1361,31 +1537,96 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
     min-width: 0;
   }
 
+  body.label-test-print .label-card-text--murat {
+    grid-template-columns: 21.5mm minmax(0, 1fr);
+    grid-template-rows: 17mm repeat(3, minmax(0, 1fr));
+    column-gap: 0.35mm;
+    row-gap: 0.15mm;
+    align-items: center;
+  }
+
+  body.label-test-print .label-card-text--murat-no-barcode {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+    column-gap: 0;
+    row-gap: 0;
+  }
+
   body.label-test-print .label-card-order {
-    font-size: 18pt;
+    font-size: 17.3pt;
     line-height: 1;
     font-weight: 900;
     color: #000;
   }
 
+  body.label-test-print .label-card-text--murat .label-card-order {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    white-space: nowrap;
+  }
+
+  body.label-test-print .label-card-text--murat-no-barcode .label-card-order {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
   body.label-test-print .label-card-main {
-    font-size: 9.5pt;
+    font-size: 9.6pt;
     line-height: 1.05;
     font-weight: 900;
     color: #000;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   body.label-test-print .label-card-sub {
-    font-size: 7.6pt;
+    font-size: 6.85pt;
     line-height: 1.1;
     font-weight: 650;
     color: #000;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  body.label-test-print .label-card-text--murat .label-card-main,
+  body.label-test-print .label-card-text--murat .label-card-sub {
+    grid-column: 1 / -1;
+  }
+
+  body.label-test-print .label-card-text--murat .label-card-main {
+    grid-row: 2;
+  }
+
+  body.label-test-print .label-card-text--murat .label-card-sub:nth-of-type(3) {
+    grid-row: 3;
+  }
+
+  body.label-test-print .label-card-text--murat .label-card-sub:nth-of-type(4) {
+    grid-row: 4;
+  }
+
+  body.label-test-print .label-murat-block {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.label-test-print .label-murat-barcode {
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.label-test-print .label-murat-barcode svg {
+    width: 74%;
+    height: auto;
+    max-width: none;
+    fill: #000;
   }
 
   body.label-test-print .label-card-divider {
@@ -1394,7 +1635,7 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   }
 
   body.label-test-print .label-card-sketch {
-    padding: 1.5mm 0.5mm;
+    padding: 0.8mm;
     box-sizing: border-box;
   }
 

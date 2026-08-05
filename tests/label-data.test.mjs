@@ -30,6 +30,7 @@ function pdfPosition(orderId, productId, details, fileName = "label.pdf") {
   const normalizedDetails = details.map((detail) => ({
     orderId,
     productId,
+    contour: detail.contour || "",
     profile: detail.profile,
     partKind: detail.partKind || LabelData.inferPartKind(detail.profile),
     orient: detail.orient || "Вертикаль",
@@ -98,7 +99,18 @@ const ambiguousCut = LabelData.buildCutPositions([
 ], "ambiguous.csv")[0];
 const ambiguousPdf = pdfPosition("7000", "1", [{ profile, lengthMm: 1000, quantity: 2 }]);
 const ambiguous = LabelData.compareCutToPdf(ambiguousCut, ambiguousPdf);
-assert("ambiguous repeated matches are detected", ambiguous.ambiguous === true);
+assert("duplicate CSV groups remain ambiguous", ambiguous.ok === false && ambiguous.ambiguous === true);
+assert("aggregate quantity mismatch identifies quantity", ambiguous.issues.some((issue) => issue.fieldDiffs.includes("\u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e")));
+
+const aggregatedCut = LabelData.buildCutPositions([
+  part("7100", "1", profile, 1000, 4)
+], "aggregated.csv")[0];
+const aggregatedPdf = pdfPosition("7100", "1", [
+  { contour: "\u041a3", profile, lengthMm: 1000, quantity: 2 },
+  { contour: "\u041a5", profile, lengthMm: 1000, quantity: 2 }
+]);
+const aggregatedMatch = LabelData.compareCutToPdf(aggregatedCut, aggregatedPdf);
+assert("PDF contour rows are summed before comparison", aggregatedMatch.ok === true && aggregatedMatch.issues.length === 0);
 
 const frameProfile = "\u0420\u0430\u043c\u0430 \u043e\u043a\u043e\u043d\u043d\u0430\u044f 63 \u043c\u043c (ProWin)";
 const impostProfile = "\u0418\u043c\u043f\u043e\u0441\u0442 82 \u043c\u043c (ProWin)";
@@ -221,6 +233,23 @@ const multiContourLabels = buildLabels(positionFromDetails("9000", "2", multiCon
 assert("multiple contours in one position are kept separate", multiContourLabels.labels.length === 8 && multiContourLabels.errors.length === 0);
 assert("multiple contours produce separate dimensions", new Set(multiContourLabels.labels.map((label) => `${label.dimension.widthMm}x${label.dimension.heightMm}`)).size === 2);
 
+const aggregatedContourCut = [
+  labelDetail({ contour: "", orient: "\u0413\u043e\u0440", lengthMm: 1006, quantity: 2, source: "cut" }),
+  labelDetail({ contour: "", orient: "\u0413\u043e\u0440", lengthMm: 506, quantity: 2, source: "cut" }),
+  labelDetail({ contour: "", orient: "\u0412\u0435\u0440", lengthMm: 1406, quantity: 4, source: "cut" })
+];
+const aggregatedContourPdf = [
+  labelDetail({ contour: "\u041a1", orient: "\u0413\u043e\u0440", lengthMm: 1006, quantity: 2, source: "pdf" }),
+  labelDetail({ contour: "\u041a1", orient: "\u0412\u0435\u0440", lengthMm: 1406, quantity: 2, source: "pdf" }),
+  labelDetail({ contour: "\u041a2", orient: "\u0413\u043e\u0440", lengthMm: 506, quantity: 2, source: "pdf" }),
+  labelDetail({ contour: "\u041a2", orient: "\u0412\u0435\u0440", lengthMm: 1406, quantity: 2, source: "pdf" })
+];
+const aggregatedContourLabels = buildLabels(positionFromDetails("9000", "8", aggregatedContourCut, aggregatedContourPdf));
+assert("aggregated CSV quantity is distributed across PDF contours", aggregatedContourLabels.labels.length === 8 && aggregatedContourLabels.errors.length === 0);
+assert("distributed labels preserve PDF contours", new Set(aggregatedContourLabels.labels.map((label) => label.contour)).size === 2);
+const aggregatedVerticalLabels = aggregatedContourLabels.labels.filter((label) => LabelData.normalizeLabelOrient(label.orientation) === "vertical");
+assert("split PDF rows keep global CSV source unit numbers", new Set(aggregatedVerticalLabels.map((label) => label.sourceUnitNo)).size === 4);
+
 const doorFrameProfile = "\u0420\u0430\u043c\u0430 \u0434\u0432\u0435\u0440\u043d\u0430\u044f 63 \u043c\u043c (ProWin)";
 const threshold = labelDetail({
   orderId: "9000",
@@ -306,12 +335,38 @@ assert("queue order follows result cycles", queue.auto[0].bars[0].cycles[0].labe
 assert("manual details are only in manual queue", queue.manual.length === 1 && queue.manual[0].labelId === "l4");
 assert("each labelId is used exactly once", queue.validation.ready === true && queue.validation.duplicateLabelIds.length === 0 && queue.validation.lostLabelIds.length === 0);
 
+const queuePrintSequence = LabelData.buildJobPrintSequence(queue);
+assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l1,l2,l3");
+assert("single cycle reserves the next A4 cell", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,2,3");
+
+const expectedOrderLabels = [
+  { ...fakeLabel("job-1", "4526", "1", 3321), side: "\u0412\u0415\u0420\u0425" },
+  { ...fakeLabel("job-2", "4526", "1", 3321), side: "\u041d\u0418\u0417" },
+  { ...fakeLabel("job-3", "4526", "1", 2491), side: "\u0412\u0415\u0420\u0425" },
+  { ...fakeLabel("job-4", "4526", "1", 2491), side: "\u041d\u0418\u0417" }
+];
+const expectedOrderQueue = {
+  auto: [{
+    profile: "\u0420\u0430\u043c\u0430",
+    bars: [{
+      barNo: 1,
+      cycles: [
+        { cycleNo: 1, mode: "double", lengthMm: 3321, labelIds: ["job-1", "job-2"], labels: expectedOrderLabels.slice(0, 2) },
+        { cycleNo: 2, mode: "double", lengthMm: 2491, labelIds: ["job-3", "job-4"], labels: expectedOrderLabels.slice(2, 4) }
+      ]
+    }]
+  }]
+};
+const expectedPrintSequence = LabelData.buildJobPrintSequence(expectedOrderQueue);
+assert("double print order is A then B for each JOB cycle", expectedPrintSequence.map((entry) => `${entry.slot}:${entry.lengthMm}`).join(",") === "A:3321,B:3321,A:2491,B:2491");
+
 const duplicateQueue = LabelData.buildLabelQueuesFromOptimizeState({
   physicalLabels: [fakeLabel("dup"), fakeLabel("other")],
   groups: [{ title: "\u0420\u0430\u043c\u0430", mode: "double" }],
   lastExportResults: new Map([["\u0420\u0430\u043c\u0430", { bins: [{ parts: [{ length: 1000, meta: [{ labelId: "dup" }, { labelId: "dup" }] }] }] }]])
 });
 assert("duplicate labelId blocks queue readiness", duplicateQueue.validation.ready === false && duplicateQueue.validation.duplicateLabelIds.includes("dup"));
+assert("duplicate labelId is excluded from a double cycle", duplicateQueue.auto[0].bars[0].cycles[0].labelIds.length === 1);
 
 const lostQueue = LabelData.buildLabelQueuesFromOptimizeState({
   physicalLabels: [fakeLabel("used"), fakeLabel("lost")],
