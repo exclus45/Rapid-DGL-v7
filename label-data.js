@@ -1020,6 +1020,29 @@ function buildJobPrintSequence(queue) {
     });
   });
 
+  let manualCellIndex = printRowIndex * 2;
+  (queue?.manual || []).forEach((item) => {
+    const label = item.label || null;
+    const labelId = normalizeLabelText(item.labelId || label?.id);
+    if (!label || !labelId) return;
+
+    entries.push({
+      printIndex,
+      profileIndex: 0,
+      profile: item.profile || "",
+      sheetIndex: "manual",
+      cycleIndex: item.no,
+      slot: "manual",
+      labelId,
+      side: normalizeLabelText(label.side),
+      lengthMm: normalizeLabelNumber(label.lengthMm || item.lengthMm),
+      label,
+      gridCellIndex: manualCellIndex
+    });
+    printIndex += 1;
+    manualCellIndex += 1;
+  });
+
   return entries;
 }
 

@@ -163,12 +163,27 @@ let lastLabelQueues = null;
 let labelPreviewMode = "logical";
 let exportCache = [];
 let exportReady = false;
+let profileRemnants = [];
+let profileRemnantSequence = 1;
+let profileRemnantImportReport = null;
 
 function normalizeProfileRuleKey(profileCode) {
   const base = extractProfileBase(profileCode || "");
   return String(base)
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+}
+
+function profileDisplayNameForCode(profileCode) {
+  const profileKey = normalizeProfileRuleKey(profileCode);
+  const groups = [
+    ...(optimizeCache.groups || []),
+    ...(optimizeCache.skewGroups || [])
+  ];
+  const matchedGroup = groups.find(
+    (group) => normalizeProfileRuleKey(group.profileCode) === profileKey
+  );
+  return String(matchedGroup?.title || profileCode || "").trim();
 }
 
 function getOptimizeRulesForProfile(profileCode) {
@@ -186,6 +201,208 @@ function getOptimizeRulesForPieces(pieces) {
     }
   }
   return selected;
+}
+
+function validateProfileRemnant(remnant) {
+  const errors = [];
+  if (!String(remnant.profileCode || "").trim()) errors.push("Укажите профиль");
+  if (!Number.isFinite(Number(remnant.lengthMm)) || Number(remnant.lengthMm) <= 0) {
+    errors.push("Длина должна быть больше 0");
+  }
+  const quantity = Number(remnant.quantity);
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    errors.push("Количество должно быть целым положительным числом");
+  }
+  return errors;
+}
+
+function getProfileRemnantChoices() {
+  return Array.from((optimizeCache.groups || []).reduce((map, group) => {
+    const profileCode = String(group.profileCode || "").trim();
+    const key = normalizeProfileRuleKey(profileCode);
+    if (profileCode && key && !map.has(key)) {
+      map.set(key, { profileCode, title: String(group.title || profileCode).trim() });
+    }
+    return map;
+  }, new Map()).values());
+}
+
+function profileRemnantImportReportHtml() {
+  const report = profileRemnantImportReport;
+  if (!report) return "";
+  if (report.fatalError) {
+    return `
+      <div class="remnant-import-report remnant-import-report--error">
+        <strong>Импорт не выполнен: ${escapeHtml(report.fileName || "Excel")}</strong>
+        <div>${escapeHtml(report.fatalError)}</div>
+      </div>
+    `;
+  }
+  const errors = (report.errors || []).map((error) => `
+    <li><strong>Строка ${escapeHtml(error.rowNumber)}</strong>: ${escapeHtml(error.reason)}${error.rawValue ? ` <span class="remnant-import-raw">(${escapeHtml(error.rawValue)})</span>` : ""}</li>
+  `).join("");
+  return `
+    <div class="remnant-import-report ${report.errors?.length ? "remnant-import-report--warning" : "remnant-import-report--success"}">
+      <strong>Импорт Excel: ${escapeHtml(report.fileName || "файл")}</strong>
+      <div>Лист: ${escapeHtml(report.sheetName || "—")} · строк данных: ${report.totalRows || 0} · добавлено строк: ${report.validRows?.length || 0} · физических остатков: ${report.physicalCount || 0} · ошибок: ${report.errors?.length || 0}</div>
+      ${errors ? `<details><summary>Показать ошибки импорта</summary><ul>${errors}</ul></details>` : ""}
+    </div>
+  `;
+}
+
+function profileRemnantsEditorHtml() {
+  const profileChoices = getProfileRemnantChoices();
+  const rows = profileRemnants.length
+    ? profileRemnants.map((remnant) => {
+      const errors = validateProfileRemnant(remnant);
+      const selectedKey = normalizeProfileRuleKey(remnant.profileCode);
+      const hasSelectedChoice = profileChoices.some(
+        (choice) => normalizeProfileRuleKey(choice.profileCode) === selectedKey
+      );
+      const options = profileChoices.map((choice) => {
+        const selected = normalizeProfileRuleKey(choice.profileCode) === selectedKey ? "selected" : "";
+        return `<option value="${escapeHtml(choice.profileCode)}" ${selected}>${escapeHtml(choice.title)}</option>`;
+      }).join("");
+      return `
+        <div class="remnant-input-row" data-remnant-id="${escapeHtml(remnant.id)}">
+          <input data-field="label" value="${escapeHtml(remnant.label || "")}" placeholder="Название / номер" />
+          <select data-field="profileCode">
+            <option value="">Профиль *</option>
+            ${!hasSelectedChoice && remnant.profileCode ? `<option value="${escapeHtml(remnant.profileCode)}" selected>${escapeHtml(remnant.profileCode)}</option>` : ""}
+            ${options}
+          </select>
+          <input data-field="lengthMm" type="number" min="0" step="1" value="${escapeHtml(remnant.lengthMm ?? "")}" placeholder="Длина, мм *" />
+          <input data-field="quantity" type="number" min="1" step="1" value="${escapeHtml(remnant.quantity ?? 1)}" placeholder="Кол-во *" />
+          <input data-field="note" value="${escapeHtml(remnant.note || "")}" placeholder="Примечание" />
+          <button class="btn-secondary remnant-remove" type="button">Удалить</button>
+          <div class="remnant-input-errors">${errors.map((error) => `<span>${escapeHtml(error)}</span>`).join("")}</div>
+        </div>
+      `;
+    }).join("")
+    : "<small>Остатки не добавлены. Оптимизация работает в обычном режиме.</small>";
+  return `
+    <div class="remnant-input-list">${rows}</div>
+    <div class="remnant-input-actions">
+      <button id="addProfileRemnantBtn" class="btn-secondary" type="button">Добавить остаток</button>
+      <button id="importProfileRemnantsBtn" class="btn-secondary" type="button">Импорт Excel</button>
+      <input id="profileRemnantsExcelInput" type="file" accept=".xlsx" hidden />
+      <button id="clearProfileRemnantsBtn" class="btn-secondary" type="button" ${profileRemnants.length ? "" : "disabled"}>Очистить все</button>
+    </div>
+    ${profileRemnantImportReportHtml()}
+    <div class="remnant-pair-warning">В двойном режиме подходящая деталь переносится на остаток как одинарный ручной рез. Остальные детали заново формируют пары; экземпляры без пары выводятся в ручной одинарный режим.</div>
+  `;
+}
+
+function invalidateOptimizationAfterRemnantChange() {
+  exportReady = false;
+  lastLabelQueues = null;
+  renderExport();
+}
+
+function refreshProfileRemnantsEditor() {
+  const editor = document.getElementById("profileRemnantsEditor");
+  if (!editor) return;
+  editor.innerHTML = profileRemnantsEditorHtml();
+
+  editor.querySelector("#addProfileRemnantBtn")?.addEventListener("click", () => {
+    profileRemnants.push({
+      id: `remnant_${Date.now().toString(36)}_${profileRemnantSequence++}`,
+      label: "",
+      profileCode: "",
+      lengthMm: "",
+      quantity: 1,
+      note: ""
+    });
+    invalidateOptimizationAfterRemnantChange();
+    refreshProfileRemnantsEditor();
+  });
+
+  const excelInput = editor.querySelector("#profileRemnantsExcelInput");
+  const importButton = editor.querySelector("#importProfileRemnantsBtn");
+  importButton?.addEventListener("click", () => excelInput?.click());
+  excelInput?.addEventListener("change", async () => {
+    const file = excelInput.files?.[0];
+    if (!file) return;
+    importButton.disabled = true;
+    importButton.textContent = "Чтение Excel...";
+    try {
+      if (!window.XlsxReader?.readFirstWorksheet || !window.RemnantImport?.parseRows) {
+        throw new Error("Модуль импорта Excel не подключен");
+      }
+      const worksheet = await window.XlsxReader.readFirstWorksheet(file);
+      const parsed = window.RemnantImport.parseRows(worksheet.rows, getProfileRemnantChoices());
+      profileRemnantImportReport = {
+        ...parsed,
+        fileName: file.name,
+        sheetName: worksheet.sheetName
+      };
+      if (!parsed.fatalError && parsed.validRows.length) {
+        const stamp = Date.now().toString(36);
+        parsed.validRows.forEach((row) => {
+          profileRemnants.push({
+            id: `remnant_${stamp}_${profileRemnantSequence++}`,
+            ...row
+          });
+        });
+        invalidateOptimizationAfterRemnantChange();
+      }
+    } catch (error) {
+      profileRemnantImportReport = {
+        fileName: file.name,
+        fatalError: error instanceof Error ? error.message : "Не удалось импортировать XLSX"
+      };
+    }
+    refreshProfileRemnantsEditor();
+  });
+
+  editor.querySelector("#clearProfileRemnantsBtn")?.addEventListener("click", () => {
+    if (!profileRemnants.length || !window.confirm("Очистить все введённые остатки профиля?")) return;
+    profileRemnants = [];
+    profileRemnantImportReport = null;
+    invalidateOptimizationAfterRemnantChange();
+    refreshProfileRemnantsEditor();
+  });
+
+  editor.querySelectorAll(".remnant-input-row").forEach((row) => {
+    const id = row.getAttribute("data-remnant-id");
+    const remnant = profileRemnants.find((item) => item.id === id);
+    if (!remnant) return;
+    row.querySelectorAll("[data-field]").forEach((field) => {
+      field.addEventListener(field.tagName === "SELECT" ? "change" : "input", () => {
+        remnant[field.getAttribute("data-field")] = field.value;
+        const errors = validateProfileRemnant(remnant);
+        const errorsEl = row.querySelector(".remnant-input-errors");
+        if (errorsEl) errorsEl.innerHTML = errors.map((error) => `<span>${escapeHtml(error)}</span>`).join("");
+        invalidateOptimizationAfterRemnantChange();
+      });
+    });
+    row.querySelector(".remnant-remove")?.addEventListener("click", () => {
+      profileRemnants = profileRemnants.filter((item) => item.id !== id);
+      invalidateOptimizationAfterRemnantChange();
+      refreshProfileRemnantsEditor();
+    });
+  });
+}
+
+function expandPhysicalProfileRemnants() {
+  const physical = [];
+  profileRemnants.forEach((remnant, sourceIndex) => {
+    const quantity = Number(remnant.quantity);
+    for (let index = 0; index < quantity; index++) {
+      physical.push({
+        id: `${remnant.id}__${index + 1}`,
+        sourceId: remnant.id,
+        label: String(remnant.label || "").trim() || `Остаток №${sourceIndex + 1}`,
+        profileCode: String(remnant.profileCode || "").trim(),
+        profileName: profileDisplayNameForCode(remnant.profileCode),
+        lengthMm: Number(remnant.lengthMm),
+        note: String(remnant.note || "").trim(),
+        physicalNo: index + 1,
+        physicalTotal: quantity
+      });
+    }
+  });
+  return physical;
 }
 
 function sortParts(parts) {
@@ -835,7 +1052,7 @@ function renderSawLabelQueue(autoQueue) {
       <div class="label-saw-profile-title">${escapeHtml(profile.profile)}</div>
       ${profile.bars.map((bar) => `
         <div class="label-saw-bar">
-          <div class="label-saw-bar-title">Хлыст ${bar.barNo}</div>
+          <div class="label-saw-bar-title">${formatLabelQueueBarTitle(bar)}</div>
           ${bar.cycles.map((cycle) => `
             <div class="label-saw-cycle">
               <div class="label-saw-cycle-meta">
@@ -857,6 +1074,14 @@ function renderSawLabelQueue(autoQueue) {
       `).join("")}
     </section>
   `).join("");
+}
+
+function formatLabelQueueBarTitle(bar) {
+  const isDouble = bar?.cycles?.some((cycle) => cycle.mode === "double");
+  if (!isDouble) return `Хлыст ${bar.barNo}`;
+
+  const firstBarNo = (bar.barNo - 1) * 2 + 1;
+  return `Хлысты ${firstBarNo}–${firstBarNo + 1}`;
 }
 
 function renderManualLabelQueue(manualQueue) {
@@ -1900,6 +2125,10 @@ function renderOptimize(parts) {
     : "";
 
   optBlocks.innerHTML = `
+    <div class="profile-remnants-panel">
+      <h3>Остатки профиля</h3>
+      <div id="profileRemnantsEditor"></div>
+    </div>
     <div class="opt-settings">
       <label>Длина хлыста, мм
         <input class="opt-stock" type="number" value="${DEFAULT_STOCK}" disabled />
@@ -1914,6 +2143,8 @@ function renderOptimize(parts) {
       ${deletedLine}
     </div>
   `;
+
+  refreshProfileRemnantsEditor();
 
   optBlocks.querySelectorAll(".opt-mode").forEach((select) => {
     select.addEventListener("change", () => {
@@ -2054,14 +2285,17 @@ function appendDeletedResults() {
   optResults.appendChild(list);
 }
 
-function formatOptimizeResult(result, stock, kerf, rules = null) {
+function formatOptimizeResult(result, stock, kerf, rules = null, labels = {}) {
   if (!result.bins.length && !result.unfit.length) {
     return "<div class=\"opt-result-sub\">Нет данных для раскроя.</div>";
   }
 
   const lines = [];
-  lines.push(`<div class="opt-result-sub">Длина хлыста: ${stock} мм, пропил: ${kerf} мм</div>`);
-  lines.push(`<div class="opt-result-count">Хлыстов: ${result.bins.length}</div>`);
+  const stockLabel = labels.stock || "хлыста";
+  const countLabel = labels.count || "Хлыстов";
+  const binLabel = labels.bin || "Хлыст";
+  lines.push(`<div class="opt-result-sub">Длина ${stockLabel}: ${stock} мм, пропил: ${kerf} мм</div>`);
+  lines.push(`<div class="opt-result-count">${countLabel}: ${result.bins.length}</div>`);
 
   result.bins.forEach((bin, idx) => {
     const parts = bin.parts
@@ -2095,7 +2329,7 @@ function formatOptimizeResult(result, stock, kerf, rules = null) {
     const percentClass = bin.leftover <= scrapMax ? "percent-scrap" : "percent-useful";
     lines.push(`
       <div class="opt-bin">
-        <strong>Хлыст ${idx + 1}:</strong> ${parts}
+        <strong>${binLabel} ${idx + 1}:</strong> ${parts}
         <span class="opt-left">Остаток: ${bin.leftover} мм</span>
         <span class="opt-left opt-left-percent ${percentClass}">${percentText}</span>
       </div>
@@ -2128,6 +2362,70 @@ function appendOptimizeError(title, message, modeLabel = "") {
   section.innerHTML = `
     <div class="opt-result-title">${title}${modeHtml}</div>
     <div class="opt-error">${message}</div>
+  `;
+  optResults.appendChild(section);
+}
+
+function appendManualRemnantResults(remnantBins, unusedRemnants) {
+  if (!remnantBins.length && !unusedRemnants.length) return;
+  const section = document.createElement("div");
+  section.className = "manual-remnant-results";
+  const usedHtml = remnantBins.map((bin) => {
+    const remnant = bin.remnant || {};
+    const profileName = remnant.profileName || profileDisplayNameForCode(remnant.profileCode);
+    const displayLabel = remnant.physicalTotal > 1
+      ? `${remnant.label} (${remnant.physicalNo}/${remnant.physicalTotal})`
+      : remnant.label;
+    const status = bin.status === "used" ? "использован" : "частично использован";
+    const rules = getOptimizeRulesForProfile(remnant.profileCode);
+    const formattedResult = formatOptimizeResult(
+      { bins: [{ used: bin.used, leftover: bin.leftover, parts: bin.parts }], unfit: [] },
+      remnant.lengthMm,
+      DEFAULT_KERF,
+      rules,
+      { stock: "остатка", count: "Остатков", bin: "Остаток" }
+    );
+    return `
+      <article class="opt-result">
+        <div class="opt-result-title">${escapeHtml(displayLabel || "Остаток")} <span class="opt-mode-label">Одинарный</span></div>
+        <div class="opt-result-sub">Профиль: ${escapeHtml(profileName || "")}${remnant.note ? ` · ${escapeHtml(remnant.note)}` : ""}</div>
+        ${formattedResult}
+        <div class="manual-remnant-status">Статус: ${status}</div>
+      </article>
+    `;
+  }).join("");
+  const unusedHtml = unusedRemnants.map((remnant) => {
+    const profileName = remnant.profileName || profileDisplayNameForCode(remnant.profileCode);
+    const displayLabel = remnant.physicalTotal > 1
+      ? `${remnant.label} (${remnant.physicalNo}/${remnant.physicalTotal})`
+      : remnant.label;
+    return `
+      <article class="opt-result manual-remnant-card--unused">
+        <div class="manual-remnant-unused-title">
+          <strong>${escapeHtml(displayLabel || "Остаток")}</strong>
+          <span class="opt-mode-label">Одинарный</span>
+        </div>
+        <div class="manual-remnant-unused-details">
+          <div><span>Профиль</span><strong>${escapeHtml(profileName || "—")}</strong></div>
+          <div><span>Длина</span><strong>${remnant.lengthMm} мм</strong></div>
+        </div>
+        ${remnant.note ? `<div class="manual-remnant-unused-note">${escapeHtml(remnant.note)}</div>` : ""}
+        <div class="manual-remnant-status manual-remnant-status--unused">Не использован</div>
+      </article>
+    `;
+  }).join("");
+  section.innerHTML = `
+    <div class="opt-manual-notice">РУЧНОЙ РАСКРОЙ ОСТАТКОВ — ${remnantBins.reduce((sum, bin) => sum + bin.parts.length, 0)} шт.</div>
+    ${usedHtml}
+    ${unusedHtml ? `
+      <section class="manual-remnant-unused-section">
+        <div class="manual-remnant-unused-heading">
+          <strong>Неиспользованные остатки</strong>
+          <span>${unusedRemnants.length} шт.</span>
+        </div>
+        <div class="manual-remnant-unused-list">${unusedHtml}</div>
+      </section>
+    ` : ""}
   `;
   optResults.appendChild(section);
 }
@@ -2258,7 +2556,10 @@ function buildExportGroups() {
     if (!items.length) return;
 
     const profileBase = extractProfileBase(group.profileCode);
-    const totalQty = selectedPieces.length;
+    const hasCalculatedResult = optimizeCache.lastExportResults?.has(group.title);
+    const totalQty = hasCalculatedResult
+      ? items.length * (mode === "double" ? 2 : 1)
+      : selectedPieces.length;
 
     groups.push({
       title: group.title,
@@ -2503,6 +2804,15 @@ function splitPairedBins(result) {
 optimizeBtn.addEventListener("click", () => {
   optResults.innerHTML = "";
 
+  const invalidRemnants = profileRemnants
+    .map((remnant, index) => ({ index, errors: validateProfileRemnant(remnant) }))
+    .filter((item) => item.errors.length);
+  if (invalidRemnants.length) {
+    refreshProfileRemnantsEditor();
+    optResults.innerHTML = `<div class="opt-error">Исправьте ошибки в блоке «Остатки профиля» перед расчётом.</div>`;
+    return;
+  }
+
   if (!optimizeCache.groups.length && !optimizeCache.skewGroups.length) {
     optResults.innerHTML = "<small>Нет данных</small>";
     return;
@@ -2512,58 +2822,200 @@ optimizeBtn.addEventListener("click", () => {
     optResults.innerHTML = "<small>Оптимайзер не подключен</small>";
     return;
   }
+  if (profileRemnants.length && typeof window.optimizeCutWithRemnants !== "function") {
+    optResults.innerHTML = "<small>Двухэтапный оптимайзер не подключен</small>";
+    return;
+  }
 
   attachPhysicalLabelsToPieces();
   renderLabelWarnings(optResults);
 
+  let autoCount = 0;
+  let autoNotice = null;
   if (optimizeCache.groups.length) {
-    const autoCount = optimizeCache.groups.reduce((sum, g) => {
+    autoCount = optimizeCache.groups.reduce((sum, g) => {
       if (g.mode === "double") {
         const leftovers = buildDoublePairs(g.pieces).leftovers.length;
         return sum + Math.max(0, g.total - leftovers);
       }
       return sum + g.total;
     }, 0);
-    const notice = document.createElement("div");
-    notice.className = "opt-auto-notice";
-    notice.textContent = `АВТОМАТИЧЕСКИЙ РЕЖИМ — ${autoCount} шт.`;
-    optResults.appendChild(notice);
+    autoNotice = document.createElement("div");
+    autoNotice.className = "opt-auto-notice";
+    autoNotice.textContent = `АВТОМАТИЧЕСКИЙ РЕЖИМ — ${autoCount} шт.`;
+    optResults.appendChild(autoNotice);
   }
 
   const leftoverSkewItems = buildLeftoverSkewItems(optimizeCache.groups);
 
   optimizeCache.lastResults = new Map();
   optimizeCache.lastExportResults = new Map();
+  let remainingPhysicalRemnants = expandPhysicalProfileRemnants();
+  const remnantBins = [];
+  const remnantManualPieces = [];
+  const recalculatedPairTitles = new Set();
+  const recalculatedPairLeftovers = [];
+  let additionalPairLeftoverCount = 0;
 
   optimizeCache.groups.forEach((group) => {
     const modeLabel = group.mode === "double" ? "Двойной" : "Одинарный";
     const optimizeRules = getOptimizeRulesForProfile(group.profileCode);
+    const groupProfileKey = normalizeProfileRuleKey(group.profileCode);
+    const matchingRemnants = remainingPhysicalRemnants.filter(
+      (remnant) => normalizeProfileRuleKey(remnant.profileCode) === groupProfileKey
+    );
     if (!group.pieces.length) {
       appendOptimizeError(group.title, "Нет данных для расчета.", modeLabel);
       return;
     }
 
     if (group.mode === "double") {
-      const { paired } = buildDoublePairs(group.pieces);
+      const { paired, leftovers: originalPairLeftovers } = buildDoublePairs(group.pieces);
       if (!paired.length) {
         appendOptimizeError(group.title, "Нет парных элементов для расчета.", modeLabel);
         return;
       }
       const pairItems = paired.map((p) => ({ lengthMm: p.lengthMm, qty: 1, meta: p.meta }));
       const baseResult = window.optimizeCut(pairItems, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
-      const result = splitPairedBins(baseResult);
+      let automaticBaseResult = baseResult;
+
+      if (matchingRemnants.length) {
+        const effectiveRules = optimizeRules || { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 0 };
+        const fixedBins = baseResult.bins.filter((bin) => bin.leftover <= effectiveRules.scrapMax);
+        const flexiblePairParts = baseResult.bins
+          .filter((bin) => bin.leftover > effectiveRules.scrapMax)
+          .flatMap((bin) => bin.parts)
+          .concat(baseResult.unfit);
+        let allocationSequence = 1;
+        const flexibleSingles = [];
+        const allocationPieceMap = new Map();
+        flexiblePairParts.forEach((pairPart) => {
+          const metaItems = Array.isArray(pairPart.meta) ? pairPart.meta : [pairPart.meta, pairPart.meta];
+          metaItems.forEach((piece) => {
+            if (!piece) return;
+            const allocationId = `pair_piece_${allocationSequence++}`;
+            allocationPieceMap.set(allocationId, piece);
+            flexibleSingles.push({
+              lengthMm: pairPart.length,
+              qty: 1,
+              meta: {
+                ...piece,
+                _manualAllocationId: allocationId
+              }
+            });
+          });
+        });
+
+        const staged = window.optimizeCutWithRemnants(
+          flexibleSingles,
+          DEFAULT_STOCK,
+          DEFAULT_KERF,
+          effectiveRules,
+          matchingRemnants,
+          { preserveSuccessfulBins: false }
+        );
+        const assignedIds = new Set();
+        staged.remnantBins.forEach((bin) => {
+          remnantBins.push(bin);
+          bin.parts.forEach((part) => {
+            assignedIds.add(part.meta?._manualAllocationId);
+          });
+        });
+
+        if (assignedIds.size) {
+          const assignedPieces = new Set(Array.from(assignedIds).map((id) => allocationPieceMap.get(id)).filter(Boolean));
+          assignedIds.forEach((id) => {
+            const piece = allocationPieceMap.get(id);
+            if (!piece) return;
+            remnantManualPieces.push({
+              title: group.title,
+              piece: {
+                ...piece,
+                manualReason: "раскрой из ручного остатка"
+              }
+            });
+          });
+          const remainingFlexiblePieces = Array.from(allocationPieceMap.values()).filter(
+            (piece) => !assignedPieces.has(piece)
+          );
+          const repaired = buildDoublePairs(remainingFlexiblePieces);
+          const repairedItems = repaired.paired.map((pair) => ({
+            lengthMm: pair.lengthMm,
+            qty: 1,
+            meta: pair.meta
+          }));
+          const repairedResult = window.optimizeCut(
+            repairedItems,
+            DEFAULT_STOCK,
+            DEFAULT_KERF,
+            optimizeRules
+          );
+          automaticBaseResult = {
+            bins: [...fixedBins, ...repairedResult.bins],
+            unfit: repairedResult.unfit
+          };
+          recalculatedPairTitles.add(group.title);
+          originalPairLeftovers.concat(repaired.leftovers).forEach((piece) => {
+            recalculatedPairLeftovers.push({
+              ...piece,
+              title: group.title,
+              manualReason: "не сформирована пара двойного режима"
+            });
+          });
+          additionalPairLeftoverCount += repaired.leftovers.length;
+          const usedRemnantIds = new Set(staged.remnantBins.map((bin) => bin.remnant.id));
+          remainingPhysicalRemnants = remainingPhysicalRemnants.filter(
+            (remnant) => !usedRemnantIds.has(remnant.id)
+          );
+        }
+      }
+
+      const result = splitPairedBins(automaticBaseResult);
       optimizeCache.lastResults.set(group.title, result);
-      optimizeCache.lastExportResults.set(group.title, baseResult);
+      optimizeCache.lastExportResults.set(group.title, automaticBaseResult);
       appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
       return;
     }
 
     const singleItems = group.pieces.map((p) => ({ lengthMm: p.lengthMm, qty: 1, meta: p }));
-    const result = window.optimizeCut(singleItems, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
+    let result;
+    if (matchingRemnants.length) {
+      const effectiveRules = optimizeRules || { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 0 };
+      const staged = window.optimizeCutWithRemnants(
+        singleItems,
+        DEFAULT_STOCK,
+        DEFAULT_KERF,
+        effectiveRules,
+        matchingRemnants
+      );
+      result = staged.automaticResult;
+      const usedIds = new Set(staged.remnantBins.map((bin) => bin.remnant.id));
+      remainingPhysicalRemnants = remainingPhysicalRemnants.filter((remnant) => !usedIds.has(remnant.id));
+      staged.remnantBins.forEach((bin) => {
+        remnantBins.push(bin);
+        bin.parts.forEach((part) => {
+          if (!part.meta) return;
+          remnantManualPieces.push({
+            title: group.title,
+            piece: { ...part.meta, manualReason: "раскрой из ручного остатка", remnantId: bin.remnant.id }
+          });
+        });
+      });
+    } else {
+      result = window.optimizeCut(singleItems, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
+    }
     optimizeCache.lastResults.set(group.title, result);
     optimizeCache.lastExportResults.set(group.title, result);
     appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
   });
+
+  if (autoNotice && (remnantManualPieces.length || additionalPairLeftoverCount)) {
+    const adjustedAutoCount = Math.max(
+      0,
+      autoCount - remnantManualPieces.length - additionalPairLeftoverCount
+    );
+    autoNotice.textContent = `АВТОМАТИЧЕСКИЙ РЕЖИМ — ${adjustedAutoCount} шт.`;
+  }
 
   const byTitleMap = new Map();
   const addPieceToTitle = (title, piece) => {
@@ -2574,24 +3026,37 @@ optimizeBtn.addEventListener("click", () => {
   optimizeCache.skewGroups.forEach((group) => {
     group.pieces.forEach((piece) => addPieceToTitle(group.title, { ...piece, manualReason: "косой элемент" }));
   });
-  leftoverSkewItems.forEach((piece) => addPieceToTitle(piece.title || "Косые элементы", piece));
+  leftoverSkewItems.forEach((piece) => {
+    if (!recalculatedPairTitles.has(piece.title)) {
+      addPieceToTitle(piece.title || "Косые элементы", piece);
+    }
+  });
+  recalculatedPairLeftovers.forEach((piece) => addPieceToTitle(piece.title || "Косые элементы", piece));
+  remnantManualPieces.forEach(({ title, piece }) => addPieceToTitle(title, piece));
   const manualQueueGroups = buildManualQueueGroups(byTitleMap);
 
   if (byTitleMap.size) {
-    const manualCount = optimizeCache.skewGroups.reduce((s, g) => s + g.pieces.length, 0) + leftoverSkewItems.length;
-    const notice = document.createElement("div");
-    notice.className = "opt-manual-notice";
-    notice.textContent = `ВНИМАНИЕ - РУЧНОЙ РЕЖИМ! — ${manualCount} шт.`;
-    optResults.appendChild(notice);
+    const manualCount = Array.from(byTitleMap.values()).reduce((sum, pieces) => {
+      return sum + pieces.filter((piece) => piece.manualReason !== "раскрой из ручного остатка").length;
+    }, 0);
+    if (manualCount) {
+      const notice = document.createElement("div");
+      notice.className = "opt-manual-notice";
+      notice.textContent = `ВНИМАНИЕ - РУЧНОЙ РЕЖИМ! — ${manualCount} шт.`;
+      optResults.appendChild(notice);
+    }
   }
 
   byTitleMap.forEach((pieces, title) => {
-    if (!pieces.length) return;
-    const items = pieces.map((p) => ({ lengthMm: p.lengthMm, qty: 1, meta: p }));
-    const optimizeRules = getOptimizeRulesForPieces(pieces);
+    const displayPieces = pieces.filter((piece) => piece.manualReason !== "раскрой из ручного остатка");
+    if (!displayPieces.length) return;
+    const items = displayPieces.map((p) => ({ lengthMm: p.lengthMm, qty: 1, meta: p }));
+    const optimizeRules = getOptimizeRulesForPieces(displayPieces);
     const result = window.optimizeCut(items, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
     appendOptimizeResult(`${title}`, result, DEFAULT_STOCK, DEFAULT_KERF, "Одинарный", optimizeRules);
   });
+
+  appendManualRemnantResults(remnantBins, remainingPhysicalRemnants);
 
   appendDeletedResults();
   exportReady = true;

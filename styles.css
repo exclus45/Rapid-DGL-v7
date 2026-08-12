@@ -292,6 +292,222 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   margin-bottom: 12px;
 }
 
+.profile-remnants-panel {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.profile-remnants-panel h3,
+.manual-remnant-results h3,
+.manual-remnant-card h4 {
+  margin: 0 0 10px;
+}
+
+.remnant-input-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 120px 90px 1.2fr auto;
+  gap: 8px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+
+.remnant-input-row input,
+.remnant-input-row select {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.remnant-input-errors {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #b42318;
+  font-size: 12px;
+}
+
+.remnant-input-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.remnant-import-report {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid #86b7e7;
+  border-radius: 8px;
+  background: #f5faff;
+  color: #17324d;
+  font-size: 13px;
+}
+
+.remnant-import-report--success {
+  border-color: #6fbf8d;
+  background: #effaf3;
+}
+
+.remnant-import-report--warning {
+  border-color: #d8a73a;
+  background: #fff8e5;
+}
+
+.remnant-import-report--error {
+  border-color: #d92d20;
+  background: #fff1f0;
+  color: #8f1f17;
+}
+
+.remnant-import-report details {
+  margin-top: 6px;
+}
+
+.remnant-import-report ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.remnant-import-raw {
+  color: #667085;
+}
+
+.remnant-pair-warning {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #d8a73a;
+  border-radius: 8px;
+  background: #fff8e5;
+  color: #7a4a00;
+  font-size: 13px;
+}
+
+.manual-remnant-results {
+  margin: 16px 0;
+}
+
+.manual-remnant-card {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid #86b7e7;
+  border-radius: 10px;
+  background: #f5faff;
+}
+
+.manual-remnant-card--unused {
+  position: relative;
+  margin: 0;
+  padding: 12px 14px 12px 16px;
+  border-color: #cbd5e1;
+  background: #fff;
+  overflow: hidden;
+}
+
+.manual-remnant-card--unused::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: #64748b;
+}
+
+.manual-remnant-unused-section {
+  margin-top: 16px;
+}
+
+.manual-remnant-unused-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.manual-remnant-unused-heading strong {
+  font-size: 17px;
+}
+
+.manual-remnant-unused-heading span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-remnant-unused-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+}
+
+.manual-remnant-unused-title {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  margin-bottom: 10px;
+  font-size: 17px;
+}
+
+.manual-remnant-unused-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.65fr);
+  gap: 16px;
+}
+
+.manual-remnant-unused-details div {
+  display: grid;
+  gap: 2px;
+}
+
+.manual-remnant-unused-details span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.manual-remnant-unused-details strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.manual-remnant-unused-note {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dashed #d6dee8;
+  color: #475569;
+  font-size: 13px;
+}
+
+.manual-remnant-status--unused {
+  color: #475569;
+  font-size: 13px;
+}
+
+.manual-remnant-card ol {
+  margin: 10px 0;
+  padding-left: 22px;
+}
+
+.manual-remnant-totals,
+.manual-remnant-status {
+  margin-top: 6px;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .remnant-input-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .opt-block {
   border: 1px solid #d6dee8;
   border-radius: 10px;
@@ -439,6 +655,9 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
 @media print {
   @page {
     margin: 10mm;
+  }
+  .manual-remnant-unused-section {
+    display: none !important;
   }
   body * {
     visibility: hidden;
@@ -1635,6 +1854,12 @@ th:nth-child(7), td:nth-child(7) { width: 10%; }
   }
 
   body.label-test-print .label-card-sketch {
+    width: 100%;
+    height: 100%;
+    max-width: 49.5mm;
+    max-height: 31.5mm;
+    align-self: center;
+    justify-self: center;
     padding: 0.8mm;
     box-sizing: border-box;
   }

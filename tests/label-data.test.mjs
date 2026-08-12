@@ -336,8 +336,18 @@ assert("manual details are only in manual queue", queue.manual.length === 1 && q
 assert("each labelId is used exactly once", queue.validation.ready === true && queue.validation.duplicateLabelIds.length === 0 && queue.validation.lostLabelIds.length === 0);
 
 const queuePrintSequence = LabelData.buildJobPrintSequence(queue);
-assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l1,l2,l3");
-assert("single cycle reserves the next A4 cell", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,2,3");
+assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.slice(0, 3).map((entry) => entry.labelId).join(",") === "l1,l2,l3");
+assert("manual labels print after all automatic labels", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l1,l2,l3,l4");
+assert("automatic cycles reserve rows before the manual queue", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,2,3,4");
+
+const denseManualPrintSequence = LabelData.buildJobPrintSequence({
+  auto: queue.auto,
+  manual: [
+    queue.manual[0],
+    { no: 2, profile: "Ручной", lengthMm: 600, labelId: "l5", label: fakeLabel("l5", "100", "1", 600) }
+  ]
+});
+assert("manual print cells are filled left to right", denseManualPrintSequence.slice(-2).map((entry) => entry.gridCellIndex).join(",") === "4,5");
 
 const expectedOrderLabels = [
   { ...fakeLabel("job-1", "4526", "1", 3321), side: "\u0412\u0415\u0420\u0425" },
