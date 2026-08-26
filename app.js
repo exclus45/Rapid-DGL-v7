@@ -39,7 +39,7 @@ appEl.innerHTML = `
       <div id="labelSummary" class="label-summary"></div>
       <div id="fillThicknessResolution"></div>
       <details class="fill-dictionary-panel">
-        <summary>Справочник толщин заполнений</summary>
+        <summary>Справочник заполнений</summary>
         <div id="fillThicknessDictionary"></div>
       </details>
       <div id="labelReview"></div>
@@ -1849,8 +1849,19 @@ function parsePositiveThicknessInput(value) {
 
 function saveFillDictionaryEntry(normalizedFormula, rawFormula, thicknessMm) {
   fillThicknessDictionary[normalizedFormula] = {
+    type: "thickness",
     displayFormula: normalizeLabelText(rawFormula) || normalizedFormula,
     thicknessMm,
+    updatedAt: new Date().toISOString()
+  };
+  return LabelData.writeFillThicknessDictionary(getAppLocalStorage(), fillThicknessDictionary);
+}
+
+function saveIgnoredMosquitoFillEntry(normalizedFormula, rawFormula) {
+  fillThicknessDictionary[normalizedFormula] = {
+    type: "ignored",
+    reason: "mosquito",
+    displayFormula: normalizeLabelText(rawFormula) || normalizedFormula,
     updatedAt: new Date().toISOString()
   };
   return LabelData.writeFillThicknessDictionary(getAppLocalStorage(), fillThicknessDictionary);
@@ -1874,23 +1885,30 @@ function renderFillThicknessTools(review) {
             <label>Толщина: <input type="text" inputmode="decimal" data-fill-input="${escapeHtml(group.key)}" /> мм</label>
             <button type="button" data-fill-save="${escapeHtml(group.key)}" data-fill-raw="${escapeHtml(group.rawFormula)}">Сохранить и применить</button>
           </div>
+          <div class="fill-resolution-input-row">
+            <button type="button" data-fill-ignore-mosquito="${escapeHtml(group.key)}" data-fill-raw="${escapeHtml(group.rawFormula)}">Москитная сетка — не учитывать</button>
+          </div>
         </section>
       `;
     }).join("");
   }
 
   const dictionaryEntries = Object.entries(fillThicknessDictionary)
-    .filter(([, entry]) => parsePositiveThicknessInput(entry?.thicknessMm ?? entry) !== null)
+    .filter(([, entry]) =>
+      parsePositiveThicknessInput(entry?.thicknessMm ?? entry) !== null || LabelData.isIgnoredFillingDictionaryEntry(entry)
+    )
     .sort(([left], [right]) => left.localeCompare(right, "ru", { numeric: true }));
   if (fillThicknessDictionaryEl) {
     fillThicknessDictionaryEl.innerHTML = dictionaryEntries.length ? `
       <table class="fill-dictionary-table">
-        <thead><tr><th>Формула</th><th>Нормализованный ключ</th><th>Толщина</th><th>Действия</th></tr></thead>
+        <thead><tr><th>Формула</th><th>Нормализованный ключ</th><th>Значение</th><th>Действия</th></tr></thead>
         <tbody>${dictionaryEntries.map(([key, entry]) => `
           <tr>
             <td>${escapeHtml(entry.displayFormula || key)}</td>
             <td><code>${escapeHtml(key)}</code></td>
-            <td>${escapeHtml(LabelData.formatFillingThickness(entry?.thicknessMm ?? entry))} мм</td>
+            <td>${LabelData.isIgnoredFillingDictionaryEntry(entry)
+              ? "Не учитывать — москитная сетка"
+              : `${escapeHtml(LabelData.formatFillingThickness(entry?.thicknessMm ?? entry))} мм`}</td>
             <td>
               <button type="button" data-fill-edit="${escapeHtml(key)}">Изменить</button>
               <button type="button" data-fill-delete="${escapeHtml(key)}">Удалить</button>
@@ -1919,11 +1937,23 @@ function renderFillThicknessTools(review) {
     });
   });
 
+  fillThicknessResolution?.querySelectorAll("[data-fill-ignore-mosquito]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.getAttribute("data-fill-ignore-mosquito") || "";
+      if (!saveIgnoredMosquitoFillEntry(key, button.getAttribute("data-fill-raw") || key)) {
+        window.alert("Не удалось сохранить справочник в localStorage.");
+        return;
+      }
+      refreshFillThicknessData(new Set([key]));
+    });
+  });
+
   fillThicknessDictionaryEl?.querySelectorAll("[data-fill-edit]").forEach((button) => {
     button.addEventListener("click", () => {
       const key = button.getAttribute("data-fill-edit") || "";
       const current = fillThicknessDictionary[key];
-      const value = window.prompt(`Толщина для ${current?.displayFormula || key}, мм:`, LabelData.formatFillingThickness(current?.thicknessMm));
+      const currentThickness = LabelData.isIgnoredFillingDictionaryEntry(current) ? "" : LabelData.formatFillingThickness(current?.thicknessMm ?? current);
+      const value = window.prompt(`Толщина для ${current?.displayFormula || key}, мм:`, currentThickness);
       if (value === null) return;
       const thickness = parsePositiveThicknessInput(value);
       if (thickness === null) {

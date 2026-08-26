@@ -109,6 +109,17 @@ function parseExplicitFillingThickness(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseMarkedGlassThickness(value) {
+  const match = normalizeLabelText(value).match(/^(\d+(?:[,.]\d+)?)\s*[mм]\s*1$/i);
+  if (!match) return null;
+  const parsed = Number(match[1].replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isBuiltInMosquitoFilling(value) {
+  return normalizeLabelText(value).toUpperCase() === "MOS";
+}
+
 function isIgnoredFillingComponent(value) {
   const key = normalizeLabelText(value).toLowerCase();
   return IGNORED_FILLING_COMPONENTS.some((component) => key === normalizeLabelText(component).toLowerCase());
@@ -120,20 +131,59 @@ function normalizeStoredThickness(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function isIgnoredFillingDictionaryEntry(value) {
+  return Boolean(value && typeof value === "object" && value.type === "ignored" && value.reason === "mosquito");
+}
+
+function findFillingDictionaryEntry(dictionary, normalizedFormula) {
+  if (!dictionary || typeof dictionary !== "object") return undefined;
+  if (Object.prototype.hasOwnProperty.call(dictionary, normalizedFormula)) return dictionary[normalizedFormula];
+  const comparableKey = normalizeLabelText(normalizedFormula).toLowerCase();
+  const matchedKey = Object.keys(dictionary).find((key) => normalizeLabelText(key).toLowerCase() === comparableKey);
+  return matchedKey === undefined ? undefined : dictionary[matchedKey];
+}
+
 function resolveFillingEntries(entries, dictionary = {}, manualKeys = new Set()) {
   return (entries || []).map((entry) => {
     const rawFormula = normalizeLabelText(entry?.rawFormula);
     const normalizedFormula = normalizeFillingFormula(entry?.normalizedFormula || rawFormula);
+    if (isBuiltInMosquitoFilling(rawFormula)) {
+      return {
+        ...entry,
+        rawFormula,
+        normalizedFormula,
+        fillingType: "mosquito",
+        ignoredReason: "mosquito",
+        systemRule: true,
+        thicknessMm: null,
+        status: "ignored"
+      };
+    }
     if (isIgnoredFillingComponent(rawFormula)) {
       return {
         ...entry,
         rawFormula,
         normalizedFormula,
+        fillingType: "component",
+        ignoredReason: "auxiliary",
         thicknessMm: null,
         status: "ignored"
       };
     }
-    const storedThickness = normalizeStoredThickness(dictionary?.[normalizedFormula]);
+    const dictionaryEntry = findFillingDictionaryEntry(dictionary, normalizedFormula);
+    if (isIgnoredFillingDictionaryEntry(dictionaryEntry)) {
+      return {
+        ...entry,
+        rawFormula,
+        normalizedFormula,
+        fillingType: "mosquito",
+        ignoredReason: "mosquito",
+        systemRule: false,
+        thicknessMm: null,
+        status: "ignored"
+      };
+    }
+    const storedThickness = normalizeStoredThickness(dictionaryEntry);
     if (storedThickness !== null) {
       return {
         ...entry,
@@ -143,7 +193,9 @@ function resolveFillingEntries(entries, dictionary = {}, manualKeys = new Set())
         status: manualKeys.has(normalizedFormula) ? "manual" : "dictionary"
       };
     }
-    const parsedThickness = parseStrictFillingThickness(rawFormula) ?? parseExplicitFillingThickness(rawFormula);
+    const parsedThickness = parseStrictFillingThickness(rawFormula) ??
+      parseExplicitFillingThickness(rawFormula) ??
+      parseMarkedGlassThickness(rawFormula);
     return {
       ...entry,
       rawFormula,
@@ -161,16 +213,19 @@ function resolveFillingGroups(groups, dictionary = {}, manualKeys = new Set()) {
     const unresolvedComponents = activeComponents.filter((component) => component.status === "unresolved");
     const thicknesses = uniqueFillingThicknesses(activeComponents);
     const conflict = thicknesses.length > 1;
+    const ignoredAsMosquito = !activeComponents.length && components.some((component) => component.ignoredReason === "mosquito");
     const status = conflict
       ? "conflict"
-      : (!activeComponents.length || unresolvedComponents.length || !thicknesses.length)
-        ? "unresolved"
-        : activeComponents.some((component) => component.status === "manual")
-          ? "manual"
-          : activeComponents.some((component) => component.status === "dictionary")
-            ? "dictionary"
-            : "parsed";
-    const primary = activeComponents[0] || null;
+      : ignoredAsMosquito
+        ? "ignored"
+        : (!activeComponents.length || unresolvedComponents.length || !thicknesses.length)
+          ? "unresolved"
+          : activeComponents.some((component) => component.status === "manual")
+            ? "manual"
+            : activeComponents.some((component) => component.status === "dictionary")
+              ? "dictionary"
+              : "parsed";
+    const primary = activeComponents[0] || components[0] || null;
     return {
       ...group,
       rawFormula: primary?.rawFormula || "",
@@ -180,6 +235,8 @@ function resolveFillingGroups(groups, dictionary = {}, manualKeys = new Set()) {
       unresolvedComponents,
       conflictingThicknesses: conflict ? thicknesses : [],
       thicknessMm: !conflict && thicknesses.length === 1 ? thicknesses[0] : null,
+      fillingType: ignoredAsMosquito ? "mosquito" : group.fillingType,
+      ignoredReason: ignoredAsMosquito ? "mosquito" : group.ignoredReason,
       status
     };
   });
@@ -202,7 +259,9 @@ function readFillThicknessDictionary(storage) {
   try {
     const parsed = JSON.parse(storage?.getItem(FILL_THICKNESS_DICTIONARY_KEY) || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => normalizeStoredThickness(value) !== null));
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) =>
+      normalizeStoredThickness(value) !== null || isIgnoredFillingDictionaryEntry(value)
+    ));
   } catch (error) {
     return {};
   }
@@ -1333,7 +1392,10 @@ window.LabelData = {
   normalizeFillingFormula,
   parseStrictFillingThickness,
   parseExplicitFillingThickness,
+  parseMarkedGlassThickness,
+  isBuiltInMosquitoFilling,
   isIgnoredFillingComponent,
+  isIgnoredFillingDictionaryEntry,
   resolveFillingEntries,
   resolveFillingGroups,
   uniqueFillingThicknesses,

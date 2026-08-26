@@ -22,6 +22,11 @@ assert.equal(LabelData.parseExplicitFillingThickness("СНД 32ммБелый"),
 assert.equal(LabelData.parseExplicitFillingThickness("СНД 24 мм Белый"), 24);
 assert.equal(LabelData.parseExplicitFillingThickness("СНД 24,5 мм Белый"), 24.5);
 assert.equal(LabelData.parseExplicitFillingThickness("24 мм + 32 мм"), null);
+assert.equal(LabelData.parseMarkedGlassThickness("4M1"), 4);
+assert.equal(LabelData.parseMarkedGlassThickness("4М1"), 4);
+assert.equal(LabelData.parseMarkedGlassThickness(" 4 m 1 "), 4);
+assert.equal(LabelData.parseMarkedGlassThickness("4M2"), null);
+assert.equal(LabelData.parseMarkedGlassThickness("4M1 extra"), null);
 
 const fillingRows = [
   { text: "№ Артикул", cells: ["№", "Артикул"] },
@@ -58,6 +63,38 @@ assert.equal(grouped[0].sourceRows.length, 2);
 assert.equal(grouped[0].components[0].status, "ignored");
 assert.equal(grouped[0].components[1].status, "parsed");
 assert.deepEqual(LabelData.uniqueFillingThicknesses(grouped), [24, 32]);
+
+const mosquitoRows = [
+  { text: "№ Артикул", cells: ["№", "Артикул"] },
+  { text: "Э2 4[10]4[10]4", cells: ["Э2", "4[10]4[10]4"] },
+  { text: "Э3 4M1", cells: ["Э3", "4M1"] },
+  { text: "Э12 MOS", cells: ["Э12", "MOS"] },
+  { text: "ПВХ дренаж Обычный", cells: ["ПВХ дренаж", "Обычный"] }
+];
+const mosquitoParsed = LabelPdf.parsePdfFillings(mosquitoRows);
+assert.deepEqual(mosquitoParsed.map((group) => [group.code, group.thicknessMm, group.status]), [
+  ["Э2", 32, "parsed"],
+  ["Э3", 4, "parsed"],
+  ["Э12", null, "ignored"]
+]);
+assert.equal(mosquitoParsed[2].fillingType, "mosquito");
+assert.equal(mosquitoParsed[2].components[0].systemRule, true);
+assert.deepEqual(LabelData.uniqueFillingThicknesses(mosquitoParsed), [4, 32]);
+assert.equal(LabelPdf.buildLabelDisplayModel({
+  partKind: "Рама",
+  side: "ВЕРХ",
+  lengthMm: 1006,
+  fillings: mosquitoParsed
+}).fillingText, "ЗАПОЛН.: 4 ММ / 32 ММ");
+
+for (const value of ["MOS", "mos", " MOS "]) {
+  const result = LabelData.resolveFillingEntries([{ rawFormula: value }])[0];
+  assert.equal(result.status, "ignored");
+  assert.equal(result.fillingType, "mosquito");
+}
+for (const value of ["MOSQUITO", "THERMOS", "MOS extra"]) {
+  assert.equal(LabelData.resolveFillingEntries([{ rawFormula: value }])[0].status, "unresolved");
+}
 
 const partiallyUnknown = LabelData.resolveFillingGroups([{
   code: "Э7",
@@ -96,6 +133,27 @@ assert.equal(LabelData.resolveFillingEntries([{ rawFormula: "4[16]4" }], loadedD
 delete loadedDictionary["4[16]4"];
 assert.equal(LabelData.resolveFillingEntries([{ rawFormula: "4[16]4" }], loadedDictionary)[0].thicknessMm, 24, "после удаления снова работает строгий автоматический расчёт");
 assert.equal(LabelData.resolveFillingEntries([{ rawFormula: "СП 24" }], loadedDictionary)[0].status, "unresolved");
+
+const manualMosquitoKey = LabelData.normalizeFillingFormula("Сетка нестандартная");
+const extendedDictionary = {
+  legacyNumber: 18,
+  legacyObject: { displayFormula: "legacyObject", thicknessMm: 22 },
+  [manualMosquitoKey]: { type: "ignored", reason: "mosquito", displayFormula: "Сетка нестандартная" }
+};
+assert.equal(LabelData.writeFillThicknessDictionary(storage, extendedDictionary), true);
+const reloadedExtendedDictionary = LabelData.readFillThicknessDictionary(storage);
+assert.equal(reloadedExtendedDictionary.legacyNumber, 18);
+assert.equal(reloadedExtendedDictionary.legacyObject.thicknessMm, 22);
+assert.equal(reloadedExtendedDictionary[manualMosquitoKey].type, "ignored");
+const manuallyIgnored = LabelData.resolveFillingGroups([{
+  code: "Э20",
+  components: [{ rawFormula: "сетка нестандартная" }]
+}], reloadedExtendedDictionary);
+assert.equal(manuallyIgnored[0].status, "ignored");
+assert.equal(manuallyIgnored[0].fillingType, "mosquito");
+delete reloadedExtendedDictionary[manualMosquitoKey];
+assert.equal(LabelData.resolveFillingEntries([{ rawFormula: "Сетка нестандартная" }], reloadedExtendedDictionary)[0].status, "unresolved");
+assert.equal(LabelData.resolveFillingEntries([{ rawFormula: "MOS" }], reloadedExtendedDictionary)[0].status, "ignored", "встроенное правило MOS нельзя удалить из справочника");
 
 assert.deepEqual(LabelData.uniqueFillingThicknesses([
   { thicknessMm: 32 }, { thicknessMm: 24 }, { thicknessMm: 32 }, { thicknessMm: null }
@@ -142,7 +200,9 @@ const appSource = fs.readFileSync("app.js", "utf8");
 const stylesSource = fs.readFileSync("styles.css", "utf8");
 assert(appSource.includes("rapidDgl.fillThicknessDictionary.v1") || fs.readFileSync("label-data.js", "utf8").includes("rapidDgl.fillThicknessDictionary.v1"));
 assert(appSource.includes("Печать этикеток заблокирована"));
-assert(appSource.includes("Справочник толщин заполнений"));
+assert(appSource.includes("Справочник заполнений"));
+assert(appSource.includes("Москитная сетка — не учитывать"));
+assert(appSource.includes('type: "ignored"'));
 assert(stylesSource.includes("label-card-text--with-filling"));
 assert(stylesSource.includes("label-card-filling"));
 
