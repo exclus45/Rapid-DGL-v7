@@ -53,19 +53,36 @@
   }
 
   function createProfileMatcher(profileChoices) {
-    const choices = (profileChoices || []).map((choice) => ({
-      profileCode: displayText(choice.profileCode),
-      title: displayText(choice.title || choice.profileCode)
-    })).filter((choice) => choice.profileCode && choice.title);
+    const catalog = root.ProfileCatalog;
+    const choices = (profileChoices || []).map((choice) => {
+      const catalogProfile = catalog?.findProfile?.(
+        choice.profileId || choice.profileCode || choice.rapidCode || choice.name || choice.title
+      );
+      return {
+        profileId: catalogProfile?.profileId || displayText(choice.profileId),
+        profileCode: catalogProfile?.articleBase || displayText(choice.profileCode),
+        rapidCode: catalogProfile?.rapidCode || displayText(choice.rapidCode),
+        name: catalogProfile?.name || displayText(choice.name || choice.title || choice.profileCode),
+        title: catalogProfile?.name || displayText(choice.title || choice.name || choice.profileCode),
+        partKind: catalogProfile?.kind || displayText(choice.partKind),
+        aliases: catalogProfile ? [...catalogProfile.aliases] : [...(choice.aliases || [])]
+      };
+    }).filter((choice) => choice.profileCode && choice.title);
 
     return function matchProfile(value) {
       const raw = displayText(value);
-      const exact = choices.filter((choice) => choice.title === raw);
-      if (exact.length === 1) return { choice: exact[0] };
       const normalized = normalizeText(raw);
-      const relaxed = choices.filter((choice) => normalizeText(choice.title) === normalized);
-      if (relaxed.length === 1) return { choice: relaxed[0] };
-      if (exact.length > 1 || relaxed.length > 1) return { error: `Название профиля неоднозначно: ${raw}` };
+      const catalogProfile = catalog?.findProfile?.(raw);
+      const matched = choices.filter((choice) => {
+        if (catalogProfile && (
+          choice.profileId === catalogProfile.profileId ||
+          choice.profileCode === catalogProfile.articleBase
+        )) return true;
+        return [choice.profileCode, choice.rapidCode, choice.name, choice.title, ...choice.aliases]
+          .some((candidate) => normalizeText(candidate) === normalized);
+      });
+      if (matched.length === 1) return { choice: matched[0] };
+      if (matched.length > 1) return { error: `Название профиля неоднозначно: ${raw}` };
       return { error: `Профиль не найден в текущем списке: ${raw || "(пусто)"}` };
     };
   }
@@ -130,7 +147,10 @@
       const labelRaw = header.columns.label >= 0 ? displayText(values[header.columns.label]) : "";
       validRows.push({
         label: labelRaw || `Остаток ${formatNumber(lengthMm)} мм`,
+        profileId: matched.profileId,
         profileCode: matched.profileCode,
+        name: matched.name,
+        partKind: matched.partKind,
         lengthMm,
         quantity,
         note: header.columns.note >= 0 ? displayText(values[header.columns.note]) : ""

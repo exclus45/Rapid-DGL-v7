@@ -8,10 +8,13 @@
  * @property {string} orderId
  * @property {string} productId
  * @property {string} name
+ * @property {string} profileId
+ * @property {string} optimizationProfileId
  * @property {number} lengthMm
  * @property {string} angles
  * @property {number} quantity
  * @property {string} profileCode
+ * @property {string} partKind
  * @property {string} position
  * @property {number|null} widthMm
  * @property {number|null} heightMm
@@ -75,10 +78,13 @@ function createPart(raw = {}) {
     orderId: String(raw.orderId || "").trim(),
     productId: String(raw.productId || "").trim(),
     name: String(raw.name || "").trim(),
+    profileId: String(raw.profileId || "").trim(),
+    optimizationProfileId: String(raw.optimizationProfileId || raw.profileId || "").trim(),
     lengthMm: Number(raw.lengthMm || 0),
     angles: String(raw.angles || "").trim(),
     quantity: Number(raw.quantity || 0),
     profileCode: String(raw.profileCode || "").trim(),
+    partKind: String(raw.partKind || "").trim(),
     position: String(raw.position || "").trim(),
     widthMm: raw.widthMm === null || raw.widthMm === undefined || raw.widthMm === "" ? null : Number(raw.widthMm),
     heightMm: raw.heightMm === null || raw.heightMm === undefined || raw.heightMm === "" ? null : Number(raw.heightMm),

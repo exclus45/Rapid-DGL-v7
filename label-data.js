@@ -25,6 +25,23 @@ const LABEL_SIDE = {
   RIGHT: "ПРАВО"
 };
 
+const LABEL_DRAINAGE_TYPE = {
+  NORMAL: "normal",
+  OUTSIDE: "outside",
+  UNKNOWN: "unknown"
+};
+
+const FILL_THICKNESS_DICTIONARY_KEY = "rapidDgl.fillThicknessDictionary.v1";
+const IGNORED_FILLING_COMPONENTS = [
+  "лист оцинкованный"
+];
+
+const LABEL_PART_KIND_ORDER = {
+  sash: 1,
+  frame: 2,
+  mullion: 3
+};
+
 function normalizeLabelText(value) {
   return String(value || "")
     .replace(/\u00a0/g, " ")
@@ -54,6 +71,158 @@ function normalizeLabelOrient(value) {
   return key || "";
 }
 
+function normalizeDrainageType(value) {
+  const key = normalizeLabelKey(value);
+  if (key === LABEL_DRAINAGE_TYPE.OUTSIDE || key.includes("снаруж")) {
+    return LABEL_DRAINAGE_TYPE.OUTSIDE;
+  }
+  if (key === LABEL_DRAINAGE_TYPE.NORMAL || key.includes("обыч")) {
+    return LABEL_DRAINAGE_TYPE.NORMAL;
+  }
+  return LABEL_DRAINAGE_TYPE.UNKNOWN;
+}
+
+function normalizeFillingFormula(value) {
+  return normalizeLabelText(value)
+    .replace(/[［【〔]/g, "[")
+    .replace(/[］】〕]/g, "]")
+    .replace(/\s+/g, "")
+    .replace(/,/g, ".");
+}
+
+function parseStrictFillingThickness(value) {
+  const source = normalizeLabelText(value);
+  const number = "(?:\\d+(?:[.,]\\d+)?)";
+  const corePattern = `${number}(?:\\[${number}\\]${number})+`;
+  const match = source.match(new RegExp(`^(${corePattern})(?:\\s*([a-zа-яё]+(?:\\s+[a-zа-яё]+)*))?$`, "i"));
+  if (!match) return null;
+  const normalizedFormula = normalizeFillingFormula(match[1]);
+  const values = normalizedFormula.match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+  const thicknessMm = values.reduce((sum, item) => sum + item, 0);
+  return Number.isFinite(thicknessMm) && thicknessMm > 0 ? thicknessMm : null;
+}
+
+function parseExplicitFillingThickness(value) {
+  const matches = Array.from(normalizeLabelText(value).matchAll(/(\d+(?:[,.]\d+)?)\s*мм/gi));
+  if (matches.length !== 1) return null;
+  const parsed = Number(matches[0][1].replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isIgnoredFillingComponent(value) {
+  const key = normalizeLabelText(value).toLowerCase();
+  return IGNORED_FILLING_COMPONENTS.some((component) => key === normalizeLabelText(component).toLowerCase());
+}
+
+function normalizeStoredThickness(value) {
+  const source = typeof value === "object" && value !== null ? value.thicknessMm : value;
+  const parsed = Number(String(source ?? "").replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveFillingEntries(entries, dictionary = {}, manualKeys = new Set()) {
+  return (entries || []).map((entry) => {
+    const rawFormula = normalizeLabelText(entry?.rawFormula);
+    const normalizedFormula = normalizeFillingFormula(entry?.normalizedFormula || rawFormula);
+    if (isIgnoredFillingComponent(rawFormula)) {
+      return {
+        ...entry,
+        rawFormula,
+        normalizedFormula,
+        thicknessMm: null,
+        status: "ignored"
+      };
+    }
+    const storedThickness = normalizeStoredThickness(dictionary?.[normalizedFormula]);
+    if (storedThickness !== null) {
+      return {
+        ...entry,
+        rawFormula,
+        normalizedFormula,
+        thicknessMm: storedThickness,
+        status: manualKeys.has(normalizedFormula) ? "manual" : "dictionary"
+      };
+    }
+    const parsedThickness = parseStrictFillingThickness(rawFormula) ?? parseExplicitFillingThickness(rawFormula);
+    return {
+      ...entry,
+      rawFormula,
+      normalizedFormula,
+      thicknessMm: parsedThickness,
+      status: parsedThickness === null ? "unresolved" : "parsed"
+    };
+  });
+}
+
+function resolveFillingGroups(groups, dictionary = {}, manualKeys = new Set()) {
+  return (groups || []).map((group) => {
+    const components = resolveFillingEntries(group.components || [], dictionary, manualKeys);
+    const activeComponents = components.filter((component) => component.status !== "ignored");
+    const unresolvedComponents = activeComponents.filter((component) => component.status === "unresolved");
+    const thicknesses = uniqueFillingThicknesses(activeComponents);
+    const conflict = thicknesses.length > 1;
+    const status = conflict
+      ? "conflict"
+      : (!activeComponents.length || unresolvedComponents.length || !thicknesses.length)
+        ? "unresolved"
+        : activeComponents.some((component) => component.status === "manual")
+          ? "manual"
+          : activeComponents.some((component) => component.status === "dictionary")
+            ? "dictionary"
+            : "parsed";
+    const primary = activeComponents[0] || null;
+    return {
+      ...group,
+      rawFormula: primary?.rawFormula || "",
+      normalizedFormula: primary?.normalizedFormula || "",
+      components,
+      sourceRows: components.map((component) => component.sourceRow || component.rawFormula).filter(Boolean),
+      unresolvedComponents,
+      conflictingThicknesses: conflict ? thicknesses : [],
+      thicknessMm: !conflict && thicknesses.length === 1 ? thicknesses[0] : null,
+      status
+    };
+  });
+}
+
+function uniqueFillingThicknesses(entries) {
+  return Array.from(new Set((entries || [])
+    .map((entry) => normalizeStoredThickness(entry?.thicknessMm))
+    .filter((value) => value !== null)))
+    .sort((a, b) => a - b);
+}
+
+function formatFillingThickness(value) {
+  const parsed = normalizeStoredThickness(value);
+  if (parsed === null) return "";
+  return String(parsed).replace(".", ",");
+}
+
+function readFillThicknessDictionary(storage) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(FILL_THICKNESS_DICTIONARY_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => normalizeStoredThickness(value) !== null));
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeFillThicknessDictionary(storage, dictionary) {
+  try {
+    storage?.setItem(FILL_THICKNESS_DICTIONARY_KEY, JSON.stringify(dictionary || {}));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isOutsideDrainageLabel(label) {
+  return normalizeDrainageType(label?.drainageType) === LABEL_DRAINAGE_TYPE.OUTSIDE &&
+    canonicalPartKindForDetail(label || {}) === "frame" &&
+    normalizeLabelKey(label?.side) === normalizeLabelKey(LABEL_SIDE.BOTTOM);
+}
+
 function displayLabelOrient(value) {
   const norm = normalizeLabelOrient(value);
   if (norm === "vertical") return "Вертикаль";
@@ -63,6 +232,9 @@ function displayLabelOrient(value) {
 
 function inferPartKind(value) {
   const key = normalizeLabelKey(value);
+  if (key === "frame") return "Рама";
+  if (key === "sash") return "Створка";
+  if (key === "mullion") return "Импост";
   if (key.includes("створ")) return "Створка";
   if (key.includes("рам")) return "Рама";
   if (key.includes("импост")) return "Импост";
@@ -78,16 +250,47 @@ function normalizedProfileForDetail(item) {
   return normalizeLabelKey(item.profile || item.name || item.profileCode);
 }
 
+function catalogProfileForDetail(item) {
+  const catalog = typeof window !== "undefined" ? window.ProfileCatalog : null;
+  if (!catalog?.findProfile) return null;
+  const values = [item?.profileId, item?.profileCode, item?.profile, item?.name];
+  for (const value of values) {
+    const profile = catalog.findProfile(value);
+    if (profile) return profile;
+  }
+  return null;
+}
+
+function normalizedComparableProfileForDetail(item) {
+  const catalog = typeof window !== "undefined" ? window.ProfileCatalog : null;
+  const sourceProfile = catalogProfileForDetail(item);
+  if (!sourceProfile) return normalizedProfileForDetail(item);
+  const optimizationProfile = catalog?.findOptimizationProfile?.(sourceProfile) || sourceProfile;
+  return normalizeLabelKey(
+    optimizationProfile.profileId || sourceProfile.optimizationProfileId || sourceProfile.profileId
+  );
+}
+
+function canonicalPartKindForDetail(item) {
+  const key = normalizedPartKindForDetail(item);
+  if (key === "frame" || key.includes("рам")) return "frame";
+  if (key === "sash" || key.includes("створ")) return "sash";
+  if (key === "mullion" || key.includes("импост")) return "mullion";
+  return "";
+}
+
 function isLabelScopeDetail(item) {
   const profileKey = normalizedProfileForDetail(item);
-  if (profileKey.includes("импост") || profileKey.includes("порог")) return false;
+  if (profileKey.includes("порог")) return false;
 
-  const kindKey = normalizedPartKindForDetail(item);
+  const kind = canonicalPartKindForDetail(item);
   return (
-    kindKey === "рама" ||
-    kindKey === "створка" ||
+    kind === "frame" ||
+    kind === "sash" ||
+    kind === "mullion" ||
     profileKey.includes("рама") ||
-    profileKey.includes("створ")
+    profileKey.includes("створ") ||
+    profileKey.includes("импост")
   );
 }
 
@@ -125,7 +328,7 @@ function labelDetailKey(item) {
     normalizeLabelText(item.productId),
     normalizedProfileForDetail(item),
     normalizedPartKindForDetail(item),
-    normalizeLabelOrient(item.orient),
+    canonicalPartKindForDetail(item) === "mullion" ? "" : normalizeLabelOrient(item.orient),
     normalizeLabelNumber(item.lengthMm),
     normalizeLabelNumber(item.quantity)
   ].join("|");
@@ -136,8 +339,8 @@ function labelDetailComparisonKey(item) {
     normalizeLabelText(item.orderId),
     normalizeLabelText(item.productId),
     normalizedPartKindForDetail(item),
-    normalizedProfileForDetail(item),
-    normalizeLabelOrient(item.orient),
+    normalizedComparableProfileForDetail(item),
+    canonicalPartKindForDetail(item) === "mullion" ? "" : normalizeLabelOrient(item.orient),
     normalizeLabelNumber(item.lengthMm)
   ].join("|");
 }
@@ -172,8 +375,12 @@ function buildCutPositions(parts, fileName = "") {
       productId,
       contour: normalizeLabelText(part.contour || part.position),
       profile: normalizeLabelText(part.name || part.profileCode),
+      profileId: normalizeLabelText(part.profileId),
+      optimizationProfileId: normalizeLabelText(part.optimizationProfileId),
       profileCode: normalizeLabelText(part.profileCode),
-      partKind: normalizeLabelText(part.partKind || inferPartKind(part.name || part.profileCode)),
+      partKind: normalizeLabelText(
+        inferPartKind(part.partKind) || part.partKind || inferPartKind(part.name || part.profileCode)
+      ),
       orient: displayLabelOrient(part.orient),
       lengthMm: normalizeLabelNumber(part.lengthMm),
       quantity: normalizeLabelNumber(part.quantity),
@@ -268,6 +475,7 @@ function describeLabelDetail(detail) {
     partKindNormalized: normalizedPartKindForDetail(detail),
     profile: normalizeLabelText(profile),
     profileNormalized: normalizedProfileForDetail(detail),
+    profileComparisonNormalized: normalizedComparableProfileForDetail(detail),
     orient: normalizeLabelText(detail.orient),
     orientNormalized: normalizeLabelOrient(detail.orient),
     lengthMm: normalizeLabelNumber(detail.lengthMm),
@@ -281,7 +489,7 @@ function compareDetailFields(cutDetail, pdfDetail) {
     ["orderId", "заказ"],
     ["productId", "позиция"],
     ["partKindNormalized", "часть"],
-    ["profileNormalized", "профиль"],
+    ["profileComparisonNormalized", "профиль"],
     ["orientNormalized", "ориентация"],
     ["lengthMm", "длина"],
     ["quantity", "количество"]
@@ -292,7 +500,7 @@ function compareDetailFields(cutDetail, pdfDetail) {
 }
 
 function scoreDetailMatch(left, right) {
-  const fields = ["orderId", "productId", "partKindNormalized", "profileNormalized", "orientNormalized", "lengthMm", "quantity"];
+  const fields = ["orderId", "productId", "partKindNormalized", "profileComparisonNormalized", "orientNormalized", "lengthMm", "quantity"];
   return fields.reduce((score, field) => score + (left[field] === right[field] ? 1 : 0), 0);
 }
 
@@ -455,6 +663,11 @@ function buildLabelKitReview(cutStore, pdfStore, conflicts, duplicates, excluded
         conflictKind = "match";
       }
       warnings.push(...comparison.warnings);
+    }
+
+    const unresolvedFillings = (pdf?.fillings || []).filter((filling) => filling.status === "unresolved" || filling.status === "conflict");
+    if (unresolvedFillings.length) {
+      warnings.push(`Не определена толщина заполнения: ${unresolvedFillings.map((filling) => filling.status === "conflict" ? `${filling.code} (конфликт ${filling.conflictingThicknesses.join(" / ")} мм)` : `${filling.code} ${filling.rawFormula || "без основной строки"}`).join(", ")}. Печать этикеток заблокирована.`);
     }
 
     return {
@@ -660,7 +873,7 @@ function reinforcementText(detail) {
   return article ? `АРМ. ${article}${sizeText}` : `АРМ.${sizeText}`;
 }
 
-function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimension, sketch) {
+function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimension, sketch, drainageType) {
   const cutDetail = unit.row.cutDetail;
   const pdfDetail = unit.row.pdfDetail;
   const id = physicalLabelId([
@@ -679,6 +892,7 @@ function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimen
     instanceTotal
   ]);
 
+  const isMullion = canonicalPartKindForDetail(pdfDetail || cutDetail) === "mullion";
   return {
     id,
     orderId: group.orderId,
@@ -688,14 +902,15 @@ function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimen
     partKind: normalizeLabelText(pdfDetail.partKind || cutDetail.partKind),
     partKindNormalized: normalizedPartKindForDetail(pdfDetail || cutDetail),
     profile: normalizeLabelText(pdfDetail.profile || cutDetail.profile),
-    orientation: displayLabelOrient(cutDetail.orient),
-    side,
+    orientation: isMullion ? "" : displayLabelOrient(cutDetail.orient),
+    side: isMullion ? "" : side,
+    drainageType: normalizeDrainageType(drainageType || pdfDetail.drainageType),
     lengthMm: normalizeLabelNumber(cutDetail.lengthMm),
     angles: normalizeLabelText(cutDetail.angles || pdfDetail.angles),
     reinforcementArticle: normalizeLabelText(pdfDetail.reinforcementArticle),
     reinforcementSizeMm: normalizeLabelNumber(pdfDetail.reinforcementSizeMm),
     reinforcementText: reinforcementText(pdfDetail),
-    dimension,
+    dimension: isMullion ? null : dimension,
     instanceNo,
     instanceTotal,
     sourcePartId: normalizeLabelText(cutDetail.sourcePartId),
@@ -717,7 +932,7 @@ function createPhysicalLabel(unit, group, side, instanceNo, instanceTotal, dimen
   };
 }
 
-function pushPairedUnits(labels, errors, units, group, sides, dimension, sketch, instanceTotalOverride) {
+function pushPairedUnits(labels, errors, units, group, sides, dimension, sketch, instanceTotalOverride, drainageType) {
   if (!units.length) {
     errors.push(groupError(group, `нет деталей для стороны ${sides.join("/")}.`));
     return 0;
@@ -736,13 +951,13 @@ function pushPairedUnits(labels, errors, units, group, sides, dimension, sketch,
     }
     const instanceNo = i / 2 + 1;
     const instanceTotal = instanceTotalOverride || pairCount;
-    labels.push(createPhysicalLabel(first, group, sides[0], instanceNo, instanceTotal, dimension, first.row.pdfDetail.sketch || sketch));
-    labels.push(createPhysicalLabel(second, group, sides[1], instanceNo, instanceTotal, dimension, second.row.pdfDetail.sketch || sketch));
+    labels.push(createPhysicalLabel(first, group, sides[0], instanceNo, instanceTotal, dimension, first.row.pdfDetail.sketch || sketch, drainageType));
+    labels.push(createPhysicalLabel(second, group, sides[1], instanceNo, instanceTotal, dimension, second.row.pdfDetail.sketch || sketch, drainageType));
   }
   return pairCount;
 }
 
-function pushDoorFrameVerticalUnits(labels, errors, units, group, dimension, sketch, instanceTotal) {
+function pushDoorFrameVerticalUnits(labels, errors, units, group, dimension, sketch, instanceTotal, drainageType) {
   const bySide = new Map([[LABEL_SIDE.LEFT, []], [LABEL_SIDE.RIGHT, []]]);
   const unknown = [];
   units.forEach((unit) => {
@@ -752,7 +967,7 @@ function pushDoorFrameVerticalUnits(labels, errors, units, group, dimension, ske
   });
 
   if (unknown.length) {
-    return pushPairedUnits(labels, errors, units, group, [LABEL_SIDE.LEFT, LABEL_SIDE.RIGHT], dimension, sketch, instanceTotal);
+    return pushPairedUnits(labels, errors, units, group, [LABEL_SIDE.LEFT, LABEL_SIDE.RIGHT], dimension, sketch, instanceTotal, drainageType);
   }
 
   const left = bySide.get(LABEL_SIDE.LEFT);
@@ -764,8 +979,8 @@ function pushDoorFrameVerticalUnits(labels, errors, units, group, dimension, ske
 
   for (let i = 0; i < left.length; i++) {
     const instanceNo = i + 1;
-    labels.push(createPhysicalLabel(left[i], group, LABEL_SIDE.LEFT, instanceNo, instanceTotal || left.length, dimension, sketch));
-    labels.push(createPhysicalLabel(right[i], group, LABEL_SIDE.RIGHT, instanceNo, instanceTotal || left.length, dimension, sketch));
+    labels.push(createPhysicalLabel(left[i], group, LABEL_SIDE.LEFT, instanceNo, instanceTotal || left.length, dimension, sketch, drainageType));
+    labels.push(createPhysicalLabel(right[i], group, LABEL_SIDE.RIGHT, instanceNo, instanceTotal || left.length, dimension, sketch, drainageType));
   }
   return left.length;
 }
@@ -773,6 +988,24 @@ function pushDoorFrameVerticalUnits(labels, errors, units, group, dimension, ske
 function buildPhysicalLabelsForGroup(group, pdfPosition, rules) {
   const labels = [];
   const errors = [];
+  const drainageType = normalizeDrainageType(pdfPosition?.drainageType);
+  if (canonicalPartKindForDetail(group) === "mullion") {
+    const units = repeatPhysicalUnits(group.rows);
+    units.forEach((unit, index) => {
+      labels.push(createPhysicalLabel(
+        unit,
+        group,
+        "",
+        index + 1,
+        units.length,
+        null,
+        unit.row.pdfDetail.sketch || pdfPosition?.sketch || null,
+        drainageType
+      ));
+    });
+    return { labels, errors };
+  }
+
   const horizontalRows = group.rows.filter((row) => normalizeLabelOrient(row.cutDetail.orient) === "horizontal");
   const verticalRows = group.rows.filter((row) => normalizeLabelOrient(row.cutDetail.orient) === "vertical");
   const thresholdRows = groupThresholdDetails(pdfPosition, group);
@@ -790,15 +1023,15 @@ function buildPhysicalLabelsForGroup(group, pdfPosition, rules) {
     } else {
       const topTotal = horizontalUnits.length;
       horizontalUnits.forEach((unit, index) => {
-        labels.push(createPhysicalLabel(unit, group, LABEL_SIDE.TOP, index + 1, topTotal, dimensionResult.dimension, pdfPosition?.sketch || null));
+        labels.push(createPhysicalLabel(unit, group, LABEL_SIDE.TOP, index + 1, topTotal, dimensionResult.dimension, pdfPosition?.sketch || null, drainageType));
       });
     }
-    pushDoorFrameVerticalUnits(labels, errors, verticalUnits, group, dimensionResult.dimension, pdfPosition?.sketch || null, horizontalUnits.length || 0);
+    pushDoorFrameVerticalUnits(labels, errors, verticalUnits, group, dimensionResult.dimension, pdfPosition?.sketch || null, horizontalUnits.length || 0, drainageType);
     return { labels, errors };
   }
 
-  const horizontalPairs = pushPairedUnits(labels, errors, horizontalUnits, group, [LABEL_SIDE.TOP, LABEL_SIDE.BOTTOM], dimensionResult.dimension, pdfPosition?.sketch || null);
-  const verticalPairs = pushPairedUnits(labels, errors, verticalUnits, group, [LABEL_SIDE.LEFT, LABEL_SIDE.RIGHT], dimensionResult.dimension, pdfPosition?.sketch || null);
+  const horizontalPairs = pushPairedUnits(labels, errors, horizontalUnits, group, [LABEL_SIDE.TOP, LABEL_SIDE.BOTTOM], dimensionResult.dimension, pdfPosition?.sketch || null, undefined, drainageType);
+  const verticalPairs = pushPairedUnits(labels, errors, verticalUnits, group, [LABEL_SIDE.LEFT, LABEL_SIDE.RIGHT], dimensionResult.dimension, pdfPosition?.sketch || null, undefined, drainageType);
   if (horizontalPairs && verticalPairs && horizontalPairs !== verticalPairs) {
     errors.push(groupError(group, `число комплектов по горизонтали и вертикали различается: ${horizontalPairs} и ${verticalPairs}.`));
   }
@@ -820,6 +1053,15 @@ function buildPhysicalLabelsForReviewRows(rows, options = {}) {
     const groups = groupPhysicalRows(matched.pairs);
     groups.forEach((group) => {
       const built = buildPhysicalLabelsForGroup(group, row.pdf, rules);
+      built.labels.forEach((label) => {
+        label.fillings = (row.pdf.fillings || []).map((filling) => ({
+          ...filling,
+          components: (filling.components || []).map((component) => ({ ...component })),
+          sourceRows: [...(filling.sourceRows || [])],
+          unresolvedComponents: (filling.unresolvedComponents || []).map((component) => ({ ...component }))
+        }));
+        label.fillThicknesses = [...(row.pdf.fillThicknesses || uniqueFillingThicknesses(row.pdf.fillings))];
+      });
       labels.push(...built.labels);
       errors.push(...built.errors);
     });
@@ -876,7 +1118,24 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
   const cyclesWithoutLabels = [];
   const cyclesModeMismatch = [];
 
-  groups.forEach((group) => {
+  const orderedGroups = groups
+    .map((group, index) => ({ group, index }))
+    .sort((a, b) => {
+      const kindA = canonicalPartKindForDetail({
+        partKind: a.group.partKind,
+        name: a.group.title
+      });
+      const kindB = canonicalPartKindForDetail({
+        partKind: b.group.partKind,
+        name: b.group.title
+      });
+      const priorityA = LABEL_PART_KIND_ORDER[kindA] || Number.MAX_SAFE_INTEGER;
+      const priorityB = LABEL_PART_KIND_ORDER[kindB] || Number.MAX_SAFE_INTEGER;
+      return priorityA - priorityB || a.index - b.index;
+    })
+    .map((entry) => entry.group);
+
+  orderedGroups.forEach((group) => {
     const result = lastExportResults.get(group.title);
     if (!result) return;
     const mode = group.mode === "double" ? "double" : "single";
@@ -1046,18 +1305,48 @@ function buildJobPrintSequence(queue) {
   return entries;
 }
 
+function paginatePhysicalLabelEntries(entries, pageSize = 16) {
+  const size = Math.max(1, Math.floor(Number(pageSize) || 16));
+  const physicalEntries = (entries || []).filter((entry) => entry?.label);
+  const pages = [];
+  for (let start = 0; start < physicalEntries.length; start += size) {
+    const pageEntries = physicalEntries.slice(start, start + size);
+    if (!pageEntries.length) break;
+    pages.push(pageEntries);
+  }
+  return pages;
+}
+
 window.LabelData = {
   LABEL_STATUS,
   LABEL_RULES,
   LABEL_SIDE,
+  LABEL_DRAINAGE_TYPE,
+  FILL_THICKNESS_DICTIONARY_KEY,
+  IGNORED_FILLING_COMPONENTS,
+  LABEL_PART_KIND_ORDER,
   normalizeLabelText,
   normalizeLabelKey,
   normalizeLabelNumber,
   normalizeLabelOrient,
+  normalizeDrainageType,
+  normalizeFillingFormula,
+  parseStrictFillingThickness,
+  parseExplicitFillingThickness,
+  isIgnoredFillingComponent,
+  resolveFillingEntries,
+  resolveFillingGroups,
+  uniqueFillingThicknesses,
+  formatFillingThickness,
+  readFillThicknessDictionary,
+  writeFillThicknessDictionary,
+  isOutsideDrainageLabel,
   displayLabelOrient,
   inferPartKind,
   normalizedPartKindForDetail,
   normalizedProfileForDetail,
+  normalizedComparableProfileForDetail,
+  canonicalPartKindForDetail,
   isLabelScopeDetail,
   isThresholdDetail,
   normalizeLabelAngles,
@@ -1075,5 +1364,6 @@ window.LabelData = {
   buildLabelKitReview,
   buildPhysicalLabelsForReviewRows,
   buildLabelQueuesFromOptimizeState,
-  buildJobPrintSequence
+  buildJobPrintSequence,
+  paginatePhysicalLabelEntries
 };

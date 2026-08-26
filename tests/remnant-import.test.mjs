@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 
 globalThis.window = {};
+await import("../profiles.js");
 await import("../remnant-import.js");
 
 const { parseRows } = globalThis.window.RemnantImport;
 const choices = [
   { profileCode: "XS358.01", title: "Рама оконная 63 мм (ProWin)" },
-  { profileCode: "XS358.02", title: "Створка оконная 77 мм (ProWin)" }
+  { profileCode: "XS358.02", title: "Створка оконная 77 мм (ProWin)" },
+  {
+    profileId: "XS358.03",
+    profileCode: "XS358.03",
+    rapidCode: "00XS358.03",
+    name: "Импост 82 мм (ProWin)",
+    title: "Импост 82 мм (ProWin)",
+    partKind: "mullion"
+  }
 ];
 const headers = ["Название / номер", "Профиль", "Длина, мм", "Количество", "Примечание"];
 
@@ -129,4 +138,34 @@ function parse(dataRows, customHeaders = headers) {
   ], choices);
   assert.match(result.fatalError, /обязательные столбцы/i);
   console.log("OK 14: отсутствие обязательных заголовков останавливает импорт");
+}
+
+{
+  for (const profileValue of ["XS358.03", "00XS358.03", "Импост 82 мм (ProWin)"]) {
+    const result = parse([["И-1", profileValue, 1270, 1, "импост"]]);
+    assert.equal(result.errors.length, 0, profileValue);
+    assert.deepEqual(
+      {
+        profileId: result.validRows[0].profileId,
+        profileCode: result.validRows[0].profileCode,
+        name: result.validRows[0].name,
+        partKind: result.validRows[0].partKind
+      },
+      {
+        profileId: "XS358.03",
+        profileCode: "XS358.03",
+        name: "Импост 82 мм (ProWin)",
+        partKind: "mullion"
+      }
+    );
+  }
+  console.log("OK 15: остаток импоста импортируется по base, RAPID-коду и названию");
+}
+
+{
+  const result = parse([["R-alias", "Рама ок/дверн 63 мм (ProWin)", 1500, 1, ""]]);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.validRows[0].profileCode, "XS358.01");
+  assert.equal(result.validRows[0].partKind, "frame");
+  console.log("OK 16: известный алиас профиля распознаётся через каталог");
 }

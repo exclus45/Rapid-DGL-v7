@@ -2,6 +2,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 globalThis.window = globalThis;
+vm.runInThisContext(fs.readFileSync("profiles.js", "utf8"), { filename: "profiles.js" });
 vm.runInThisContext(fs.readFileSync("label-data.js", "utf8"), { filename: "label-data.js" });
 
 const { LabelData } = globalThis;
@@ -14,11 +15,12 @@ function assert(name, condition, details = "") {
 }
 
 function part(orderId, productId, profile, lengthMm, quantity, orient = "Вер") {
+  const catalogProfile = ProfileCatalog.findProfile(profile);
   return {
     orderId,
     productId,
     name: profile,
-    profileCode: "S358.01",
+    profileCode: catalogProfile?.articleBase || "S358.01",
     lengthMm,
     quantity,
     orient,
@@ -32,6 +34,9 @@ function pdfPosition(orderId, productId, details, fileName = "label.pdf") {
     productId,
     contour: detail.contour || "",
     profile: detail.profile,
+    profileId: detail.profileId || "",
+    optimizationProfileId: detail.optimizationProfileId || "",
+    profileCode: detail.profileCode || "",
     partKind: detail.partKind || LabelData.inferPartKind(detail.profile),
     orient: detail.orient || "Вертикаль",
     lengthMm: detail.lengthMm,
@@ -112,12 +117,110 @@ const aggregatedPdf = pdfPosition("7100", "1", [
 const aggregatedMatch = LabelData.compareCutToPdf(aggregatedCut, aggregatedPdf);
 assert("PDF contour rows are summed before comparison", aggregatedMatch.ok === true && aggregatedMatch.issues.length === 0);
 
+function profileCompatibilityCut(rows, profileCode = "XS358.01") {
+  const profileRecord = ProfileCatalog.findProfile(profileCode);
+  return LabelData.buildCutPositions(rows.map((row) => ({
+    orderId: "4972",
+    productId: "1",
+    name: profileRecord?.name || profileCode,
+    profileId: profileRecord?.profileId || "",
+    optimizationProfileId: profileRecord?.optimizationProfileId || "",
+    profileCode: profileRecord?.articleBase || profileCode,
+    partKind: row.partKind || "Рама",
+    lengthMm: row.lengthMm,
+    quantity: row.quantity,
+    orient: row.orient,
+    angles: "45 - 45"
+  })), "4972.csv")[0];
+}
+
+function profileCompatibilityPdf(rows) {
+  return pdfPosition("4972", "1", rows.map((row) => ({
+    profile: row.profile || "Рама окон-дверн 63 мм (ProWin)",
+    profileCode: row.profileCode || "",
+    partKind: row.partKind || "Рама",
+    lengthMm: row.lengthMm,
+    quantity: row.quantity,
+    orient: row.orient
+  })), "4972.pdf");
+}
+
+const compatibleProfileMatch = LabelData.compareCutToPdf(
+  profileCompatibilityCut([{ lengthMm: 1906, quantity: 2, orient: "Вертикаль" }]),
+  profileCompatibilityPdf([{ profileCode: "XS358.01 D", lengthMm: 1906, quantity: 2, orient: "Вертикаль" }])
+);
+assert(
+  "XS358.01 CSV matches XS358.01 D PDF through optimizationProfileId",
+  compatibleProfileMatch.ok === true,
+  JSON.stringify(compatibleProfileMatch)
+);
+
+const incompatibleProfileMatch = LabelData.compareCutToPdf(
+  profileCompatibilityCut([{ lengthMm: 1906, quantity: 2, orient: "Вертикаль" }]),
+  profileCompatibilityPdf([{
+    profile: "Створка оконная 77 мм (ProWin)",
+    profileCode: "XS358.02",
+    partKind: "Рама",
+    lengthMm: 1906,
+    quantity: 2,
+    orient: "Вертикаль"
+  }])
+);
+assert("XS358.01 and XS358.02 remain incompatible", incompatibleProfileMatch.ok === false);
+
+const compatibleProfileWrongSize = LabelData.compareCutToPdf(
+  profileCompatibilityCut([{ lengthMm: 1906, quantity: 2, orient: "Вертикаль" }]),
+  profileCompatibilityPdf([{ profileCode: "XS358.01 D", lengthMm: 1907, quantity: 2, orient: "Вертикаль" }])
+);
+assert("different length remains a conflict for compatible profiles", compatibleProfileWrongSize.ok === false);
+
+const compatibleProfileWrongQuantity = LabelData.compareCutToPdf(
+  profileCompatibilityCut([{ lengthMm: 1906, quantity: 2, orient: "Вертикаль" }]),
+  profileCompatibilityPdf([{ profileCode: "XS358.01 D", lengthMm: 1906, quantity: 1, orient: "Вертикаль" }])
+);
+assert("different quantity remains a conflict for compatible profiles", compatibleProfileWrongQuantity.ok === false);
+
+const compatibleProfileWrongOrient = LabelData.compareCutToPdf(
+  profileCompatibilityCut([{ lengthMm: 1906, quantity: 2, orient: "Вертикаль" }]),
+  profileCompatibilityPdf([{ profileCode: "XS358.01 D", lengthMm: 1906, quantity: 2, orient: "Горизонталь" }])
+);
+assert("different orientation remains a conflict for compatible profiles", compatibleProfileWrongOrient.ok === false);
+
+const order4972Cut = profileCompatibilityCut([
+  { lengthMm: 1906, quantity: 2, orient: "Вертикаль" },
+  { lengthMm: 816, quantity: 2, orient: "Горизонталь" }
+]);
+const order4972Pdf = profileCompatibilityPdf([
+  { lengthMm: 1906, quantity: 2, orient: "Вертикаль" },
+  { lengthMm: 816, quantity: 2, orient: "Горизонталь" }
+]);
+const order4972Match = LabelData.compareCutToPdf(order4972Cut, order4972Pdf);
+assert("order 4972/1 passes without a false data conflict", order4972Match.ok === true, JSON.stringify(order4972Match));
+const order4972Review = LabelData.buildLabelKitReview(
+  new Map([[order4972Cut.key, order4972Cut]]),
+  new Map([[order4972Pdf.key, order4972Pdf]]),
+  [],
+  [],
+  new Set(),
+  new Map()
+);
+assert("order 4972/1 review status is ready", order4972Review.rows[0]?.status === LabelData.LABEL_STATUS.READY);
+
 const frameProfile = "\u0420\u0430\u043c\u0430 \u043e\u043a\u043e\u043d\u043d\u0430\u044f 63 \u043c\u043c (ProWin)";
 const impostProfile = "\u0418\u043c\u043f\u043e\u0441\u0442 82 \u043c\u043c (ProWin)";
 const thresholdProfile = "\u041f\u043e\u0440\u043e\u0433 \u0434\u0432\u0435\u0440\u0438 \u0430\u043b\u044e\u043c\u0438\u043d\u0438\u0435\u0432\u044b\u0439";
 assert("frame details are in label scope", LabelData.isLabelScopeDetail({ profile: frameProfile, partKind: "\u0420\u0430\u043c\u0430" }));
-assert("impost details are outside label scope", !LabelData.isLabelScopeDetail({ profile: impostProfile, partKind: "\u0418\u043c\u043f\u043e\u0441\u0442" }));
+assert("impost details are in label scope", LabelData.isLabelScopeDetail({ profile: impostProfile, partKind: "\u0418\u043c\u043f\u043e\u0441\u0442" }));
+assert("catalog frame kind remains in label scope", LabelData.isLabelScopeDetail({ profile: frameProfile, partKind: "frame" }));
+assert("catalog mullion kind is in label scope", LabelData.isLabelScopeDetail({ profile: impostProfile, partKind: "mullion" }));
 assert("threshold profile is outside label scope even with frame part kind", !LabelData.isLabelScopeDetail({ profile: thresholdProfile, partKind: "\u0420\u0430\u043c\u0430" }));
+
+const catalogFrameCut = LabelData.buildCutPositions([{
+  ...part("7999", "1", frameProfile, 1000),
+  profileCode: "XS358.01",
+  partKind: "frame"
+}], "catalog-frame.csv")[0];
+assert("catalog frame kind is normalized for legacy label comparison", catalogFrameCut.details[0]?.partKind === "\u0420\u0430\u043c\u0430");
 
 const mismatchCut = LabelData.buildCutPositions([
   {
@@ -329,16 +432,16 @@ const queue = LabelData.buildLabelQueuesFromOptimizeState({
   lastExportResults: qResults,
   manualGroups: qManual
 });
-assert("single cycle has one label", queue.auto[0].bars[0].cycles[0].labelIds.length === 1);
-assert("double cycle has two different labels", queue.auto[1].bars[0].cycles[0].labelIds.length === 2 && new Set(queue.auto[1].bars[0].cycles[0].labelIds).size === 2);
-assert("queue order follows result cycles", queue.auto[0].bars[0].cycles[0].labelIds[0] === "l1" && queue.auto[1].bars[0].cycles[0].labelIds.join(",") === "l2,l3");
+assert("single cycle has one label", queue.auto[1].bars[0].cycles[0].labelIds.length === 1);
+assert("double cycle has two different labels", queue.auto[0].bars[0].cycles[0].labelIds.length === 2 && new Set(queue.auto[0].bars[0].cycles[0].labelIds).size === 2);
+assert("queue order follows sash then frame", queue.auto[0].bars[0].cycles[0].labelIds.join(",") === "l2,l3" && queue.auto[1].bars[0].cycles[0].labelIds[0] === "l1");
 assert("manual details are only in manual queue", queue.manual.length === 1 && queue.manual[0].labelId === "l4");
 assert("each labelId is used exactly once", queue.validation.ready === true && queue.validation.duplicateLabelIds.length === 0 && queue.validation.lostLabelIds.length === 0);
 
 const queuePrintSequence = LabelData.buildJobPrintSequence(queue);
-assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.slice(0, 3).map((entry) => entry.labelId).join(",") === "l1,l2,l3");
-assert("manual labels print after all automatic labels", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l1,l2,l3,l4");
-assert("automatic cycles reserve rows before the manual queue", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,2,3,4");
+assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.slice(0, 3).map((entry) => entry.labelId).join(",") === "l2,l3,l1");
+assert("manual labels print after all automatic labels", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l2,l3,l1,l4");
+assert("automatic cycles reserve rows before the manual queue", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,1,2,4");
 
 const denseManualPrintSequence = LabelData.buildJobPrintSequence({
   auto: queue.auto,
@@ -395,3 +498,55 @@ const sameSizeQueue = LabelData.buildLabelQueuesFromOptimizeState({
   lastExportResults: new Map([["\u0420\u0430\u043c\u0430", { bins: [{ parts: [{ length: 1000, meta: [{ labelId: "a" }, { labelId: "b" }] }] }] }]])
 });
 assert("same sizes from different positions keep different labelIds", sameSizeQueue.auto[0].bars[0].cycles[0].labelIds.join(",") === "a,b");
+
+const pairedMullionQueue = LabelData.buildLabelQueuesFromOptimizeState({
+  physicalLabels: [fakeLabel("m1"), fakeLabel("m2")],
+  groups: [{ title: "Импост 82 мм (ProWin)", profileCode: "XS358.03", partKind: "mullion", mode: "double" }],
+  lastExportResults: new Map([["Импост 82 мм (ProWin)", {
+    bins: [{ parts: [
+      { length: 1265, meta: [{ labelId: "m1" }, { labelId: "m2" }] }
+    ] }],
+    unfit: []
+  }]])
+});
+assert("mullion double pair keeps a two-label cycle", pairedMullionQueue.auto[0].bars[0].cycles[0].mode === "double");
+assert("paired mullion double queue remains ready", pairedMullionQueue.validation.ready === true);
+
+function pageCountForPhysicalLabels(count) {
+  const entries = Array.from({ length: count }, (_, index) => ({
+    label: fakeLabel(`page-${index + 1}`),
+    gridCellIndex: index * 3
+  }));
+  return LabelData.paginatePhysicalLabelEntries(entries, 16).length;
+}
+
+assert("1 physical label creates 1 page", pageCountForPhysicalLabels(1) === 1);
+assert("13 physical labels create 1 page", pageCountForPhysicalLabels(13) === 1);
+assert("16 physical labels create 1 page", pageCountForPhysicalLabels(16) === 1);
+assert("17 physical labels create 2 pages", pageCountForPhysicalLabels(17) === 2);
+assert("32 physical labels create 2 pages without an empty final page", pageCountForPhysicalLabels(32) === 2);
+assert("33 physical labels create 3 pages", pageCountForPhysicalLabels(33) === 3);
+assert("no physical labels create no pages", LabelData.paginatePhysicalLabelEntries([], 16).length === 0);
+
+const printStyles = fs.readFileSync("styles.css", "utf8");
+const appSource = fs.readFileSync("app.js", "utf8");
+assert(
+  "label border checkbox and its state logic are removed",
+  !appSource.includes("labelPrintBorders") &&
+    !appSource.includes("Границы ячеек") &&
+    !appSource.includes("showBorders") &&
+    !appSource.includes("label-test-sheet--no-borders")
+);
+assert(
+  "label cell borders are always transparent",
+  (printStyles.match(/border:\s*0\.15mm solid transparent;/g) || []).length === 2 &&
+    !printStyles.includes("label-test-sheet--no-borders")
+);
+assert(
+  "label print removes hidden application panels from layout",
+  /body\.label-test-print #app > \*\s*\{\s*display:\s*none !important;/m.test(printStyles)
+);
+assert(
+  "only non-final label pages force a page break",
+  /\.label-test-page:not\(:last-child\)\s*\{[^}]*break-after:\s*page;[^}]*page-break-after:\s*always;/s.test(printStyles)
+);

@@ -20,7 +20,7 @@ appEl.innerHTML = `
         <button id="clearBtn" type="button" class="btn-secondary">Очистить</button>
         <button id="printImportBtn" type="button" class="btn-secondary">Печать</button>
       </div>
-      <div id="dropZone">Перетащите CSV/TXT и PDF сюда или выберите через кнопки выше</div>
+      <div id="dropZone">Перетащите CSV/TXT, PDF или папку с файлами сюда<br /><small>или выберите через кнопки выше</small></div>
       <div class="file-list-title">Файлы раскроя</div>
       <div id="fileList"></div>
       <div class="file-list-title">PDF для этикеток</div>
@@ -37,6 +37,11 @@ appEl.innerHTML = `
     <div class="card">
       <h2 class="center-heading">Проверка комплекта задания</h2>
       <div id="labelSummary" class="label-summary"></div>
+      <div id="fillThicknessResolution"></div>
+      <details class="fill-dictionary-panel">
+        <summary>Справочник толщин заполнений</summary>
+        <div id="fillThicknessDictionary"></div>
+      </details>
       <div id="labelReview"></div>
     </div>
   </div>
@@ -46,10 +51,7 @@ appEl.innerHTML = `
       <h2 class="center-heading">Этикетки</h2>
       <div class="label-print-controls">
         <button id="testPrintLabelsBtn" class="btn-secondary" type="button" disabled>Пробная печать A4</button>
-        <label class="label-print-option">
-          <input id="labelPrintBorders" type="checkbox" checked />
-          Границы ячеек
-        </label>
+        <span id="labelPrintBlockReason" class="label-print-block-reason"></span>
       </div>
       <div id="labelsSummary" class="label-summary"></div>
       <div id="labelsPreview"></div>
@@ -57,25 +59,64 @@ appEl.innerHTML = `
   </div>
 
   <div id="labelTestPrintSheet" class="label-test-sheet" aria-hidden="true"></div>
+  <div id="reinforcementPrintArea" class="reinforcement-print-area" aria-hidden="true">
+    <div class="opt-result-header reinforcement-print-header">
+      <h2>Результат раскроя</h2>
+      <div class="opt-date">
+        <label for="reinforcementPrintDate">Дата:</label>
+        <input id="reinforcementPrintDate" type="date" readonly tabindex="-1" />
+      </div>
+    </div>
+    <div id="reinforcementPrintResults"></div>
+  </div>
 
   <div class="tab-panel" id="tab-optimize">
-    <div class="card">
-      <div class="opt-controls">
-        <button id="optimizeBtn" class="import-btn" type="button">Рассчитать</button>
-        <button id="printBtn" class="btn-secondary" type="button">Печать</button>
-        <button id="saveBtn" class="btn-secondary" type="button">Сохранить</button>
+    <div class="optimization-view-header">
+      <h2>Оптимизация</h2>
+      <div class="optimization-view-tabs" role="tablist" aria-label="Раздел оптимизации">
+        <button class="optimization-view-tab active" type="button" data-optimization-view="profiles" role="tab" aria-selected="true">Профили</button>
+        <button class="optimization-view-tab" type="button" data-optimization-view="reinforcement" role="tab" aria-selected="false">Армирование</button>
       </div>
-      <div id="optBlocks"></div>
     </div>
-    <div class="card print-area">
-      <div class="opt-result-header">
-        <h2>Результат раскроя</h2>
-        <div class="opt-date">
-          <label for="cutDate">Дата:</label>
-          <input id="cutDate" type="date" />
+
+    <div id="optimizationProfilesView" class="optimization-view-panel active" data-optimization-panel="profiles" role="tabpanel">
+      <div class="card">
+        <div class="opt-controls">
+          <button id="optimizeBtn" class="import-btn" type="button">Рассчитать</button>
+          <button id="printBtn" class="btn-secondary" type="button">Печать</button>
+          <button id="saveBtn" class="btn-secondary" type="button">Сохранить</button>
         </div>
+        <div id="optBlocks"></div>
       </div>
-      <div id="optResults"><small>Нет расчетов</small></div>
+      <div class="card print-area">
+        <div class="opt-result-header">
+          <h2>Результат раскроя</h2>
+          <div class="opt-date">
+            <label for="cutDate">Дата:</label>
+            <input id="cutDate" type="date" />
+          </div>
+        </div>
+        <div id="optResults"><small>Нет расчетов</small></div>
+      </div>
+    </div>
+
+    <div id="optimizationReinforcementView" class="optimization-view-panel" data-optimization-panel="reinforcement" role="tabpanel">
+      <div class="card">
+        <div class="opt-controls reinforcement-print-controls">
+          <button id="printReinforcementBtn" class="btn-secondary" type="button">Печать</button>
+        </div>
+        <div id="reinforcementOptimizationSettings"><small>Нет данных армирования</small></div>
+      </div>
+      <div class="card reinforcement-optimization-card">
+        <div class="opt-result-header">
+          <h2>Результат раскроя</h2>
+          <div class="opt-date">
+            <label for="reinforcementCutDate">Дата:</label>
+            <input id="reinforcementCutDate" type="date" />
+          </div>
+        </div>
+        <div id="reinforcementOptimizationResults"><small>Нет данных армирования</small></div>
+      </div>
     </div>
   </div>
 
@@ -103,24 +144,36 @@ const input = document.getElementById("csvInput");
 const pdfInput = document.getElementById("pdfInput");
 const clearBtn = document.getElementById("clearBtn");
 const dropZone = document.getElementById("dropZone");
+const dropZoneIdleHtml = dropZone?.innerHTML || "";
 const fileList = document.getElementById("fileList");
 const pdfFileList = document.getElementById("pdfFileList");
 const totalCountEl = document.getElementById("totalCount");
 const optBlocks = document.getElementById("optBlocks");
 const optResults = document.getElementById("optResults");
+const reinforcementOptimizationSettings = document.getElementById("reinforcementOptimizationSettings");
+const reinforcementOptimizationResults = document.getElementById("reinforcementOptimizationResults");
+const reinforcementPrintArea = document.getElementById("reinforcementPrintArea");
+const reinforcementPrintResults = document.getElementById("reinforcementPrintResults");
+const optimizationViewTabs = document.querySelectorAll(".optimization-view-tab");
+const optimizationViewPanels = document.querySelectorAll(".optimization-view-panel");
 const optimizeBtn = document.getElementById("optimizeBtn");
 const printBtn = document.getElementById("printBtn");
+const printReinforcementBtn = document.getElementById("printReinforcementBtn");
 const printImportBtn = document.getElementById("printImportBtn");
 const saveBtn = document.getElementById("saveBtn");
 const cutDateInput = document.getElementById("cutDate");
+const reinforcementCutDateInput = document.getElementById("reinforcementCutDate");
+const reinforcementPrintDate = document.getElementById("reinforcementPrintDate");
 const exportBlocks = document.getElementById("exportBlocks");
 const exportTitle = document.getElementById("exportTitle");
 const labelSummary = document.getElementById("labelSummary");
 const labelReview = document.getElementById("labelReview");
+const fillThicknessResolution = document.getElementById("fillThicknessResolution");
+const fillThicknessDictionaryEl = document.getElementById("fillThicknessDictionary");
 const labelsSummary = document.getElementById("labelsSummary");
 const labelsPreview = document.getElementById("labelsPreview");
 const testPrintLabelsBtn = document.getElementById("testPrintLabelsBtn");
-const labelPrintBorders = document.getElementById("labelPrintBorders");
+const labelPrintBlockReason = document.getElementById("labelPrintBlockReason");
 const labelTestPrintSheet = document.getElementById("labelTestPrintSheet");
 const refreshMuratBtn = document.getElementById("refreshMuratBtn");
 const muratTableWrap = document.getElementById("muratTableWrap");
@@ -129,6 +182,13 @@ const DEFAULT_STOCK = 6500;
 const DEFAULT_KERF = 5;
 const DEFAULT_MODE = "double";
 const DEFAULT_SCRAP_MAX = 70;
+const APP_PVC_OPTIMIZATION_MODE = Object.freeze({
+  MAX_SAVINGS: "max_savings",
+  SOFT_BY_PRODUCT: "soft_by_product",
+  HARD_BY_PRODUCT: "hard_by_product"
+});
+const DEFAULT_PVC_OPTIMIZATION_MODE = APP_PVC_OPTIMIZATION_MODE.MAX_SAVINGS;
+const PART_KIND_ORDER = Object.freeze({ sash: 1, frame: 2, mullion: 3 });
 const SHOW_LABEL_BARCODE = false;
 const PROFILE_BAD_LEFTOVER_RULES = {
   S35801: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
@@ -147,6 +207,14 @@ const EXPORT_COLOR = 0;
 const EXPORT_PAIR_MODE = 0;
 
 let allParts = [];
+const selectedProductionGroups = new Map();
+const collapsedImportGroups = new Set();
+const reinforcementModes = new Map();
+let reinforcementOptimizationMode = "max_savings";
+let reinforcementOptimizationCache = [];
+let activeOptimizationView = "profiles";
+let sharedCutDateValue = "";
+let pvcOptimizationMode = DEFAULT_PVC_OPTIMIZATION_MODE;
 let optimizeCache = { groups: [], skewGroups: [], baseSkewCount: 0 };
 let deletedParts = [];
 const filesMap = new Map();
@@ -167,11 +235,31 @@ let profileRemnants = [];
 let profileRemnantSequence = 1;
 let profileRemnantImportReport = null;
 
+function getAppLocalStorage() {
+  try {
+    return window.localStorage;
+  } catch (error) {
+    return null;
+  }
+}
+
+let fillThicknessDictionary = LabelData.readFillThicknessDictionary(getAppLocalStorage());
+
 function normalizeProfileRuleKey(profileCode) {
   const base = extractProfileBase(profileCode || "");
   return String(base)
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+}
+
+function resolveAppCatalogProfile(...values) {
+  const catalog = typeof window !== "undefined" ? window.ProfileCatalog : null;
+  if (!catalog?.findProfile) return null;
+  for (const value of values) {
+    const profile = catalog.findProfile(value);
+    if (profile) return profile;
+  }
+  return null;
 }
 
 function profileDisplayNameForCode(profileCode) {
@@ -187,6 +275,16 @@ function profileDisplayNameForCode(profileCode) {
 }
 
 function getOptimizeRulesForProfile(profileCode) {
+  const catalogProfile = resolveAppCatalogProfile(profileCode);
+  if (catalogProfile) {
+    const optimizationProfile = window.ProfileCatalog?.findOptimizationProfile?.(catalogProfile) || catalogProfile;
+    const optimization = optimizationProfile.optimization || {};
+    if (optimization.scrapMax === null || optimization.scrapMax === undefined ||
+        optimization.minUsefulLeftover === null || optimization.minUsefulLeftover === undefined) {
+      return null;
+    }
+    return optimization;
+  }
   const key = normalizeProfileRuleKey(profileCode);
   return PROFILE_BAD_LEFTOVER_RULES[key] || null;
 }
@@ -201,6 +299,16 @@ function getOptimizeRulesForPieces(pieces) {
     }
   }
   return selected;
+}
+
+function applyCatalogProfileToRemnant(remnant, ...values) {
+  const catalogProfile = resolveAppCatalogProfile(...values);
+  if (!catalogProfile) return remnant;
+  remnant.profileId = catalogProfile.profileId;
+  remnant.profileCode = catalogProfile.articleBase;
+  remnant.name = catalogProfile.name;
+  remnant.partKind = catalogProfile.kind;
+  return remnant;
 }
 
 function validateProfileRemnant(remnant) {
@@ -218,10 +326,19 @@ function validateProfileRemnant(remnant) {
 
 function getProfileRemnantChoices() {
   return Array.from((optimizeCache.groups || []).reduce((map, group) => {
-    const profileCode = String(group.profileCode || "").trim();
+    const catalogProfile = resolveAppCatalogProfile(group.profileId, group.profileCode, group.title);
+    const profileCode = String(catalogProfile?.articleBase || group.profileCode || "").trim();
     const key = normalizeProfileRuleKey(profileCode);
     if (profileCode && key && !map.has(key)) {
-      map.set(key, { profileCode, title: String(group.title || profileCode).trim() });
+      map.set(key, {
+        profileId: catalogProfile?.profileId || group.profileId || "",
+        profileCode,
+        rapidCode: catalogProfile?.rapidCode || "",
+        name: catalogProfile?.name || String(group.title || profileCode).trim(),
+        title: catalogProfile?.name || String(group.title || profileCode).trim(),
+        partKind: catalogProfile?.kind || group.partKind || "",
+        aliases: catalogProfile ? [...catalogProfile.aliases] : []
+      });
     }
     return map;
   }, new Map()).values());
@@ -308,7 +425,10 @@ function refreshProfileRemnantsEditor() {
     profileRemnants.push({
       id: `remnant_${Date.now().toString(36)}_${profileRemnantSequence++}`,
       label: "",
+      profileId: "",
       profileCode: "",
+      name: "",
+      partKind: "",
       lengthMm: "",
       quantity: 1,
       note: ""
@@ -369,7 +489,14 @@ function refreshProfileRemnantsEditor() {
     if (!remnant) return;
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.addEventListener(field.tagName === "SELECT" ? "change" : "input", () => {
-        remnant[field.getAttribute("data-field")] = field.value;
+        const fieldName = field.getAttribute("data-field");
+        remnant[fieldName] = field.value;
+        if (fieldName === "profileCode") {
+          remnant.profileId = "";
+          remnant.name = "";
+          remnant.partKind = "";
+          applyCatalogProfileToRemnant(remnant, field.value);
+        }
         const errors = validateProfileRemnant(remnant);
         const errorsEl = row.querySelector(".remnant-input-errors");
         if (errorsEl) errorsEl.innerHTML = errors.map((error) => `<span>${escapeHtml(error)}</span>`).join("");
@@ -387,14 +514,18 @@ function refreshProfileRemnantsEditor() {
 function expandPhysicalProfileRemnants() {
   const physical = [];
   profileRemnants.forEach((remnant, sourceIndex) => {
+    applyCatalogProfileToRemnant(remnant, remnant.profileId, remnant.profileCode, remnant.name);
     const quantity = Number(remnant.quantity);
     for (let index = 0; index < quantity; index++) {
       physical.push({
         id: `${remnant.id}__${index + 1}`,
         sourceId: remnant.id,
         label: String(remnant.label || "").trim() || `Остаток №${sourceIndex + 1}`,
+        profileId: String(remnant.profileId || "").trim(),
         profileCode: String(remnant.profileCode || "").trim(),
-        profileName: profileDisplayNameForCode(remnant.profileCode),
+        profileName: String(remnant.name || profileDisplayNameForCode(remnant.profileCode)).trim(),
+        name: String(remnant.name || "").trim(),
+        partKind: String(remnant.partKind || "").trim(),
         lengthMm: Number(remnant.lengthMm),
         note: String(remnant.note || "").trim(),
         physicalNo: index + 1,
@@ -434,6 +565,8 @@ function normalizeGroupKey(value) {
 }
 
 function canonicalGroupName(part) {
+  const catalogProfile = resolveAppCatalogProfile(part?.profileId, part?.profileCode, part?.name);
+  if (catalogProfile) return catalogProfile.name;
   const nameRaw = String(part.name || "").trim();
   const nameKey = normalizeGroupKey(nameRaw);
   const codeKey = normalizeGroupKey(part.profileCode || "");
@@ -459,17 +592,145 @@ function canonicalGroupName(part) {
   return nameRaw;
 }
 
+function sourceProductionGroupIdentity(part) {
+  const catalogProfile = resolveAppCatalogProfile(
+    part?.profileId,
+    part?.profileCode,
+    part?.name,
+    part?.profile
+  );
+  const name = catalogProfile?.name || canonicalGroupName({
+    ...part,
+    name: part?.name || part?.profile || ""
+  });
+  const profileId = catalogProfile?.profileId || "";
+  const profileCode = catalogProfile?.articleBase || String(part?.profileCode || "").trim();
+  const partKind = catalogProfile?.kind || String(part?.partKind || "").trim();
+  const key = catalogProfile
+    ? `profile:${profileId || profileCode}`
+    : normalizeGroupText(name);
+  return { key, profileId, profileCode, name, partKind };
+}
+
+function syncProductionGroupSelection(parts, reset = false) {
+  const currentKeys = new Set((parts || []).map((part) => sourceProductionGroupIdentity(part).key));
+  if (reset) {
+    selectedProductionGroups.clear();
+    collapsedImportGroups.clear();
+  }
+  Array.from(selectedProductionGroups.keys()).forEach((key) => {
+    if (!currentKeys.has(key)) selectedProductionGroups.delete(key);
+  });
+  Array.from(collapsedImportGroups).forEach((key) => {
+    if (key !== "import-skew-groups" && !currentKeys.has(key)) collapsedImportGroups.delete(key);
+  });
+  if (!currentKeys.size) collapsedImportGroups.clear();
+  currentKeys.forEach((key) => {
+    if (!selectedProductionGroups.has(key)) selectedProductionGroups.set(key, true);
+  });
+  return selectedProductionGroups;
+}
+
+function isProductionGroupSelected(part) {
+  const key = sourceProductionGroupIdentity(part).key;
+  return selectedProductionGroups.get(key) !== false;
+}
+
+function getSelectedProductionParts(parts = allParts) {
+  return (parts || []).filter(isProductionGroupSelected);
+}
+
+function currentProductionGroupKeys(parts = allParts) {
+  return new Set((parts || []).map((part) => sourceProductionGroupIdentity(part).key));
+}
+
+function setAllProductionGroupsSelected(parts, selected) {
+  syncProductionGroupSelection(parts);
+  let changed = false;
+  currentProductionGroupKeys(parts).forEach((key) => {
+    const nextValue = Boolean(selected);
+    if (selectedProductionGroups.get(key) !== nextValue) changed = true;
+    selectedProductionGroups.set(key, nextValue);
+  });
+  return changed;
+}
+
+function setAllImportGroupsCollapsed(parts, collapsed) {
+  const keys = currentProductionGroupKeys(parts);
+  keys.forEach((key) => {
+    if (collapsed) collapsedImportGroups.add(key);
+    else collapsedImportGroups.delete(key);
+  });
+  if ((parts || []).some(isSkewPart)) {
+    if (collapsed) collapsedImportGroups.add("import-skew-groups");
+    else collapsedImportGroups.delete("import-skew-groups");
+  }
+}
+
+function getSelectedProductionPdfPositions(positions) {
+  return (positions || []).map((position) => {
+    const details = (position.details || []).filter(isProductionGroupSelected);
+    return {
+      ...position,
+      details,
+      signature: window.LabelPdf?.pdfPositionSignature
+        ? window.LabelPdf.pdfPositionSignature(details, position.drainageType)
+        : LabelData.detailSignature(details)
+    };
+  }).filter((position) => position.details.length > 0);
+}
+
 function groupByNomenclature(parts) {
   const groups = new Map();
   for (const p of parts) {
-    const name = canonicalGroupName(p);
-    const key = normalizeGroupText(name);
+    const { key, profileId, profileCode, name, partKind } = sourceProductionGroupIdentity(p);
     if (!groups.has(key)) {
-      groups.set(key, { key, name, items: [] });
+      groups.set(key, { key, profileId, profileCode, name, partKind, items: [] });
     }
     groups.get(key).items.push(p);
   }
   return Array.from(groups.values()).sort((a, b) => {
+    const partKindA = String(a.partKind || "").trim().toLowerCase();
+    const partKindB = String(b.partKind || "").trim().toLowerCase();
+    const kindOrderA = PART_KIND_ORDER[partKindA] || Number.MAX_SAFE_INTEGER;
+    const kindOrderB = PART_KIND_ORDER[partKindB] || Number.MAX_SAFE_INTEGER;
+    if (kindOrderA !== kindOrderB) return kindOrderA - kindOrderB;
+    return String(a.name).localeCompare(String(b.name), "ru", { sensitivity: "base" });
+  });
+}
+
+function groupByOptimizationProfile(parts) {
+  const groups = new Map();
+  for (const p of parts) {
+    const sourceProfile = resolveAppCatalogProfile(p?.profileId, p?.profileCode, p?.name);
+    const optimizationProfile = window.ProfileCatalog?.findOptimizationProfile?.(
+      sourceProfile || p?.optimizationProfileId
+    ) || sourceProfile;
+    if (!optimizationProfile) {
+      const fallbackGroup = groupByNomenclature([p])[0];
+      const fallbackKey = fallbackGroup?.key || normalizeGroupText(p?.name || p?.profileCode);
+      if (!groups.has(fallbackKey)) groups.set(fallbackKey, { ...fallbackGroup, items: [] });
+      groups.get(fallbackKey).items.push(p);
+      continue;
+    }
+
+    const key = `optimization-profile:${optimizationProfile.profileId}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        profileId: optimizationProfile.profileId,
+        profileCode: optimizationProfile.articleBase,
+        name: optimizationProfile.name,
+        partKind: optimizationProfile.kind,
+        items: []
+      });
+    }
+    groups.get(key).items.push(p);
+  }
+  return Array.from(groups.values()).sort((a, b) => {
+    const kindOrderA = PART_KIND_ORDER[String(a.partKind || "").trim().toLowerCase()] || Number.MAX_SAFE_INTEGER;
+    const kindOrderB = PART_KIND_ORDER[String(b.partKind || "").trim().toLowerCase()] || Number.MAX_SAFE_INTEGER;
+    if (kindOrderA !== kindOrderB) return kindOrderA - kindOrderB;
     return String(a.name).localeCompare(String(b.name), "ru", { sensitivity: "base" });
   });
 }
@@ -558,7 +819,14 @@ function angleToW(angle) {
   return padLeft(val, 4);
 }
 
+function isMullionPart(part) {
+  const catalogProfile = resolveAppCatalogProfile(part?.profileId, part?.profileCode, part?.name);
+  const partKind = catalogProfile?.kind || part?.partKind;
+  return String(partKind || "").trim().toLowerCase() === "mullion";
+}
+
 function isSkewPart(part) {
+  if (isMullionPart(part)) return false;
   if (!part.angles) return false;
   const norm = normalizeAngles(part.angles);
   return !["45-45", "45-90", "90-45"].includes(norm);
@@ -603,11 +871,62 @@ function renderGroupTable(items) {
   `;
 }
 
+function renderProductionGroup(group, extraClass = "") {
+  const count = group.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  const selected = selectedProductionGroups.get(group.key) !== false;
+  const collapsed = collapsedImportGroups.has(group.key);
+  return `
+    <div class="group ${extraClass} ${selected ? "" : "is-production-disabled"}" data-group="${escapeHtml(group.key)}" data-production-group="${escapeHtml(group.key)}" data-collapse-key="${escapeHtml(group.key)}">
+      <div class="group-header">
+        <button class="group-toggle" type="button" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "+" : "−"}</button>
+        <label class="group-production-select">
+          <input class="production-group-checkbox" type="checkbox" ${selected ? "checked" : ""} />
+          <span class="group-title">${escapeHtml(group.name)}</span>
+        </label>
+        <div class="group-meta">${count} шт.</div>
+      </div>
+      <div class="group-body" style="display:${collapsed ? "none" : "block"}">
+        ${renderGroupTable(group.items)}
+      </div>
+    </div>
+  `;
+}
+
+function invalidateProductionRun() {
+  exportReady = false;
+  exportCache = [];
+  lastLabelQueues = null;
+  lastMuratRecords = [];
+  labelPreviewMode = "logical";
+  if (optResults) optResults.innerHTML = "<small>Нет расчетов</small>";
+}
+
+function restoreImportScroll(scrollY) {
+  window.scrollTo(0, scrollY);
+  window.requestAnimationFrame(() => window.scrollTo(0, scrollY));
+}
+
+function applyImportGroupCollapseState() {
+  tableWrap.querySelectorAll("[data-collapse-key]").forEach((group) => {
+    const collapseKey = group.getAttribute("data-collapse-key");
+    const collapsed = collapsedImportGroups.has(collapseKey);
+    const toggle = group.querySelector(".group-toggle");
+    const body = group.querySelector(".group-body");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.textContent = collapsed ? "+" : "−";
+    }
+    if (body) body.style.display = collapsed ? "none" : "block";
+  });
+}
+
 function renderTable(parts) {
+  syncProductionGroupSelection(parts);
+  const productionParts = getSelectedProductionParts(parts);
   if (!parts.length) {
     tableWrap.innerHTML = "<small>Нет данных</small>";
     totalCountEl.textContent = "0";
-    renderOptimize(parts);
+    renderOptimize(productionParts);
     return;
   }
 
@@ -616,47 +935,70 @@ function renderTable(parts) {
   const skewParts = sorted.filter((p) => isSkewPart(p));
   const groups = groupByNomenclature(normalParts);
   const skewGroups = groupByNomenclature(skewParts);
-  const totalCount = parts.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const totalCount = productionParts.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   totalCountEl.textContent = String(totalCount);
 
-  const html = groups.map((g) => {
-    const count = g.items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-    return `
-      <div class="group" data-group="${g.key}">
-        <div class="group-header">
-          <button class="group-toggle" type="button" aria-expanded="true">−</button>
-          <div class="group-title">${g.name}</div>
-          <div class="group-meta">${count} шт.</div>
-        </div>
-        <div class="group-body">
-          ${renderGroupTable(g.items)}
-        </div>
-      </div>
-    `;
-  }).join("");
+  const html = groups.map((group) => renderProductionGroup(group)).join("");
 
   const skewHtml = skewGroups.length
     ? `
-      <div class="group skew-group">
+      <div class="group skew-group" data-collapse-key="import-skew-groups">
         <div class="group-header">
-          <button class="group-toggle" type="button" aria-expanded="true">−</button>
+          <button class="group-toggle" type="button" aria-expanded="${collapsedImportGroups.has("import-skew-groups") ? "false" : "true"}">${collapsedImportGroups.has("import-skew-groups") ? "+" : "−"}</button>
           <div class="group-title">Косые элементы</div>
           <div class="group-meta">${skewParts.reduce((s, it) => s + (Number(it.quantity) || 0), 0)} шт.</div>
         </div>
-        <div class="group-body">
-          ${skewGroups.map((g) => renderGroupTable(g.items)).join("")}
+        <div class="group-body skew-profile-groups" style="display:${collapsedImportGroups.has("import-skew-groups") ? "none" : "block"}">
+          ${skewGroups.map((group) => renderProductionGroup(group, "skew-profile-group")).join("")}
         </div>
       </div>
     `
     : "";
 
-  tableWrap.innerHTML = html + skewHtml;
+  const groupActions = `
+    <div class="import-group-actions">
+      <div class="import-group-action-pair">
+        <button class="import-group-action" type="button" data-action="select-all">Выбрать все</button>
+        <button class="import-group-action" type="button" data-action="select-none">Снять все</button>
+      </div>
+      <div class="import-group-action-pair">
+        <button class="import-group-action" type="button" data-action="expand-all">Развернуть все</button>
+        <button class="import-group-action" type="button" data-action="collapse-all">Свернуть все</button>
+      </div>
+    </div>
+  `;
+
+  tableWrap.innerHTML = groupActions + html + skewHtml;
+
+  tableWrap.querySelectorAll(".import-group-action").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.getAttribute("data-action");
+      const scrollY = window.scrollY;
+      if (action === "select-all" || action === "select-none") {
+        const changed = setAllProductionGroupsSelected(allParts, action === "select-all");
+        if (changed) {
+          invalidateProductionRun();
+          renderTable(allParts);
+          renderLabelKitCheck();
+        }
+      } else if (action === "expand-all" || action === "collapse-all") {
+        setAllImportGroupsCollapsed(allParts, action === "collapse-all");
+        applyImportGroupCollapseState();
+      }
+      restoreImportScroll(scrollY);
+    });
+  });
 
   tableWrap.querySelectorAll(".group-toggle").forEach((btn) => {
     btn.addEventListener("click", () => {
       const group = btn.closest(".group");
       const body = group.querySelector(".group-body");
       const expanded = btn.getAttribute("aria-expanded") === "true";
+      const collapseKey = group.getAttribute("data-collapse-key");
+      if (collapseKey) {
+        if (expanded) collapsedImportGroups.add(collapseKey);
+        else collapsedImportGroups.delete(collapseKey);
+      }
       btn.setAttribute("aria-expanded", String(!expanded));
       btn.textContent = expanded ? "+" : "−";
       body.style.display = expanded ? "none" : "block";
@@ -671,7 +1013,25 @@ function renderTable(parts) {
     });
   });
 
-  renderOptimize(parts);
+  tableWrap.querySelectorAll(".production-group-checkbox").forEach((checkbox) => {
+    checkbox.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    checkbox.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const group = checkbox.closest("[data-production-group]");
+      const key = group?.getAttribute("data-production-group");
+      if (!key) return;
+      const scrollY = window.scrollY;
+      selectedProductionGroups.set(key, checkbox.checked);
+      invalidateProductionRun();
+      renderTable(allParts);
+      renderLabelKitCheck();
+      restoreImportScroll(scrollY);
+    });
+  });
+
+  renderOptimize(productionParts);
 }
 
 function removePartById(id) {
@@ -763,6 +1123,36 @@ function currentCutStore() {
 
 function currentPdfStore() {
   return LabelData.collectStoresFromPdfFiles(Array.from(pdfFilesMap.values())).store;
+}
+
+function selectedCutFilesForProduction() {
+  return Array.from(filesMap.values())
+    .map((fileInfo) => ({
+      ...fileInfo,
+      parts: fileInfo.parts.filter(isProductionGroupSelected)
+    }))
+    .filter((fileInfo) => fileInfo.parts.length > 0);
+}
+
+function selectedPdfFilesForProduction() {
+  return Array.from(pdfFilesMap.values()).map((fileInfo) => {
+    const positions = getSelectedProductionPdfPositions(fileInfo.positions);
+    return { ...fileInfo, positions };
+  }).filter((fileInfo) => fileInfo.positions.length > 0);
+}
+
+function selectedReinforcementPdfPositionsForProduction() {
+  const selectedKeys = new Set(
+    getSelectedProductionParts(allParts).map((part) => sourceProductionGroupIdentity(part).key)
+  );
+  return Array.from(pdfFilesMap.values()).flatMap((fileInfo) => {
+    return (fileInfo.positions || []).map((position) => {
+      const allDetails = (position.allDetails || position.details || []).filter((detail) => {
+        return selectedKeys.has(sourceProductionGroupIdentity(detail).key);
+      });
+      return { ...position, allDetails, details: allDetails };
+    }).filter((position) => position.allDetails.length > 0);
+  });
 }
 
 function vetPositionsForLoad(positions, store, sourceKind, fileName) {
@@ -898,31 +1288,34 @@ function getJobPrintEntries(limit = Infinity) {
 
 function updateTestPrintButton() {
   if (!testPrintLabelsBtn) return;
-  const available = Boolean(lastLabelQueues?.validation?.ready && getJobPrintEntries(1).length > 0);
+  const unresolved = currentUnresolvedFillingGroups();
+  const queueAvailable = Boolean(lastLabelQueues?.validation?.ready && getJobPrintEntries(1).length > 0);
+  const available = queueAvailable && unresolved.length === 0;
   testPrintLabelsBtn.disabled = !available;
-  testPrintLabelsBtn.title = available ? "" : "Сначала сформируйте готовую очередь после оптимизации";
+  const reason = unresolved.length
+    ? `Печать заблокирована: не определена толщина ${unresolved.length} формул заполнений.`
+    : queueAvailable
+      ? ""
+      : "Сначала сформируйте готовую очередь после оптимизации";
+  testPrintLabelsBtn.title = reason;
+  if (labelPrintBlockReason) labelPrintBlockReason.textContent = reason;
 }
 
-function renderTestPrintSheet(entries, options = {}) {
+function renderTestPrintSheet(entries) {
   if (!labelTestPrintSheet) return;
-  const sourceEntries = entries || [];
-  const entriesByCell = new Map(sourceEntries.map((entry) => [entry.gridCellIndex, entry]));
-  const lastCellIndex = sourceEntries.reduce((max, entry) => Math.max(max, entry.gridCellIndex), -1);
-  const pageCount = Math.max(1, Math.ceil((lastCellIndex + 1) / 16));
-  const pages = [];
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+  const entryPages = LabelData.paginatePhysicalLabelEntries(entries, 16);
+  const pages = entryPages.map((pageEntries) => {
     const cells = [];
     for (let cellIndex = 0; cellIndex < 16; cellIndex++) {
-      const entry = entriesByCell.get(pageIndex * 16 + cellIndex);
+      const entry = pageEntries[cellIndex];
       cells.push(`
         <div class="label-test-cell">
           ${entry?.label ? renderLabelCard(entry.label) : ""}
         </div>
       `);
     }
-    pages.push(`<div class="label-test-page">${cells.join("")}</div>`);
-  }
-  labelTestPrintSheet.classList.toggle("label-test-sheet--no-borders", options.showBorders === false);
+    return `<div class="label-test-page">${cells.join("")}</div>`;
+  });
   labelTestPrintSheet.innerHTML = pages.join("");
 }
 
@@ -995,12 +1388,16 @@ function fitTestPrintText() {
 }
 
 async function printTestLabelsA4() {
+  if (currentUnresolvedFillingGroups().length) {
+    window.alert("Печать этикеток заблокирована: сначала укажите толщину неизвестных формул заполнений в разделе «Проверка комплекта».");
+    return;
+  }
   const entries = getJobPrintEntries();
   if (!entries.length) return;
   const message = "Выберите принтер и нажмите “Печать”. Макет уже подготовлен под лист A4";
   if (!window.confirm(message)) return;
   logPrintQueueDiagnostics(entries);
-  renderTestPrintSheet(entries, { showBorders: labelPrintBorders?.checked !== false });
+  renderTestPrintSheet(entries);
   await waitForTestPrintImages();
   clearTestPrintTextFit();
   document.body.classList.add("label-test-print");
@@ -1159,9 +1556,7 @@ function renderLabelCard(label) {
   const sketch = sketchUrl
     ? `<img class="label-card-sketch-img" src="${sketchUrl}" alt="">`
     : `<div class="label-card-sketch-empty"></div>`;
-  const dimension = label.dimension
-    ? `${label.dimension.widthMm} × ${label.dimension.heightMm} мм`
-    : "—";
+  const displayModel = LabelPdf.buildLabelDisplayModel(label);
   const muratRecord = muratRecordForLabel(label);
   const muratBarcode = muratRecord ? renderMuratBarcodeSvg(String(muratRecord.dataRec)) : "";
   const muratBlock = SHOW_LABEL_BARCODE && muratBarcode
@@ -1173,16 +1568,21 @@ function renderLabelCard(label) {
     : "";
   const textClasses = [
     "label-card-text",
+    displayModel.template === "mullion" ? "label-card-text--mullion" : "",
+    displayModel.fillingText ? "label-card-text--with-filling" : "",
     muratRecord ? "label-card-text--murat" : "",
     muratRecord && !SHOW_LABEL_BARCODE ? "label-card-text--murat-no-barcode" : ""
   ].filter(Boolean).join(" ");
+  const showDrainage = LabelData.isOutsideDrainageLabel(label);
+  const mainHtml = displayModel.template === "frame-sash"
+    ? `${escapeHtml(displayModel.typeText)} • <span class="label-card-side">${escapeHtml(displayModel.sideText)}${showDrainage ? '<span class="label-drainage-badge">ДРЕНАЖ</span>' : ""}</span> • ${displayModel.lengthMm} мм`
+    : escapeHtml(displayModel.mainText);
   return `
     <article class="label-card" data-label-id="${escapeHtml(label.id)}">
       <div class="${textClasses}">
         <div class="label-card-order">${escapeHtml(label.orderId)}/${escapeHtml(label.productId)}</div>
-        <div class="label-card-main">${displayPartKind(label.partKind)} • ${escapeHtml(label.side)} • ${label.lengthMm} мм</div>
-        <div class="label-card-sub">${escapeHtml(label.reinforcementText || "АРМ.")}</div>
-        <div class="label-card-sub">ГАБАРИТ: ${escapeHtml(dimension)}</div>
+        <div class="label-card-main${showDrainage ? " label-card-main--drainage" : ""}">${mainHtml}</div>
+        ${displayModel.subLines.map((line) => `<div class="label-card-sub${line === displayModel.fillingText ? " label-card-filling" : ""}">${escapeHtml(line)}</div>`).join("")}
         ${muratBlock}
       </div>
       <div class="label-card-divider"></div>
@@ -1191,10 +1591,365 @@ function renderLabelCard(label) {
   `;
 }
 
+function formatReinforcementOptimizationStats(stats) {
+  if (!stats) return "";
+  const percent = Number(stats.usedPercent || 0).toLocaleString("ru-RU", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  });
+  return `
+    <div class="opt-material-stats reinforcement-material-stats">
+      ${stats.physicalStockCount} хлыстов
+      <span>·</span> ${formatOptimizationMeters(stats.totalMaterialMm)} м материала
+      <span>·</span> ${formatOptimizationMeters(stats.partsLengthMm)} м деталей
+      <span>·</span> ${formatOptimizationMeters(stats.kerfMm)} м пропил
+      <span>·</span> ${formatOptimizationMeters(stats.leftoverMm)} м остаток
+      <span>·</span> ${percent}% использование
+    </div>
+  `;
+}
+
+function renderReinforcementOptimization(changedGroupKey = "") {
+  if (!reinforcementOptimizationSettings || !reinforcementOptimizationResults || !reinforcementPrintResults) return;
+  const api = window.ReinforcementOptimization;
+  if (!api?.buildReinforcementGroups) {
+    reinforcementOptimizationSettings.innerHTML = "<small>Модуль армирования не подключен</small>";
+    reinforcementOptimizationResults.innerHTML = "<small>Модуль армирования не подключен</small>";
+    reinforcementPrintResults.innerHTML = "<small>Модуль армирования не подключен</small>";
+    return;
+  }
+  const groups = api.buildReinforcementGroups(selectedReinforcementPdfPositionsForProduction());
+  const currentKeys = new Set(groups.map((group) => group.key));
+  Array.from(reinforcementModes.keys()).forEach((key) => {
+    if (!currentKeys.has(key)) reinforcementModes.delete(key);
+  });
+  groups.forEach((group) => {
+    if (!reinforcementModes.has(group.key)) reinforcementModes.set(group.key, api.DEFAULT_MODE || "double");
+  });
+  if (changedGroupKey && api.optimizeReinforcementGroup) {
+    const previousByKey = new Map(reinforcementOptimizationCache.map((result) => [result.groupKey, result]));
+    reinforcementOptimizationCache = groups.map((group) => {
+      if (group.key === changedGroupKey || !previousByKey.has(group.key)) {
+        return api.optimizeReinforcementGroup(
+          group,
+          reinforcementModes.get(group.key),
+          reinforcementOptimizationMode
+        );
+      }
+      return previousByKey.get(group.key);
+    });
+  } else {
+    reinforcementOptimizationCache = api.optimizeReinforcementGroups(
+      groups,
+      reinforcementModes,
+      reinforcementOptimizationMode
+    );
+  }
+  if (!groups.length) {
+    reinforcementOptimizationCache = [];
+    reinforcementOptimizationSettings.innerHTML = `
+      <div class="opt-settings">
+        <label>Режим оптимизации
+          <select class="opt-mode reinforcement-global-mode">
+            <option value="max_savings" ${reinforcementOptimizationMode === "max_savings" ? "selected" : ""}>Максимальная экономия</option>
+            <option value="hard_by_product" ${reinforcementOptimizationMode === "hard_by_product" ? "selected" : ""}>Жёсткий по изделиям</option>
+          </select>
+        </label>
+        <label>Длина хлыста, мм <input type="number" value="${api.STOCK_LENGTH_MM}" disabled /></label>
+        <label>Пропил, мм <input type="number" value="${api.KERF_MM}" disabled /></label>
+      </div>
+      <small>У выбранных деталей нет данных армирования.</small>
+    `;
+    reinforcementOptimizationResults.innerHTML = "<small>У выбранных деталей нет данных армирования.</small>";
+    reinforcementPrintResults.innerHTML = "<small>У выбранных деталей нет данных армирования.</small>";
+    return;
+  }
+
+  const manualCount = reinforcementOptimizationCache.reduce((sum, result) => sum + result.manualItems.length, 0);
+  reinforcementOptimizationSettings.innerHTML = `
+    <div class="opt-settings">
+      <label>Режим оптимизации
+        <select class="opt-mode reinforcement-global-mode">
+          <option value="max_savings" ${reinforcementOptimizationMode === "max_savings" ? "selected" : ""}>Максимальная экономия</option>
+          <option value="hard_by_product" ${reinforcementOptimizationMode === "hard_by_product" ? "selected" : ""}>Жёсткий по изделиям</option>
+        </select>
+      </label>
+      <label>Длина хлыста, мм <input type="number" value="${api.STOCK_LENGTH_MM}" disabled /></label>
+      <label>Пропил, мм <input type="number" value="${api.KERF_MM}" disabled /></label>
+    </div>
+    <div class="opt-summary reinforcement-opt-summary">
+      ${groups.map((group) => `
+        <div class="opt-line reinforcement-opt-line" data-reinforcement-key="${escapeHtml(group.key)}">
+          <div class="opt-line-title">${escapeHtml(group.reinforcementArticle)}</div>
+          <div class="opt-line-count">${group.quantity} шт.</div>
+          <div class="opt-line-controls">
+            <select class="opt-mode reinforcement-mode">
+              <option value="single" ${reinforcementModes.get(group.key) === "single" ? "selected" : ""}>Одинарный</option>
+              <option value="double" ${reinforcementModes.get(group.key) === "double" ? "selected" : ""}>Двойной</option>
+            </select>
+          </div>
+        </div>
+      `).join("")}
+      <div class="opt-line opt-line-skew reinforcement-manual-summary">
+        <div class="opt-line-title">Ручной режим</div>
+        <div class="opt-line-count">${manualCount} шт.</div>
+      </div>
+    </div>
+  `;
+
+  const reinforcementChip = (item) => `
+    <span class="cut-chip reinforcement-cut-chip" title="${escapeHtml(item.manualReason || "")}">
+      <span class="cut-chip-meta">
+        ${escapeHtml(item.orderId)}${item.productId ? ` / ${escapeHtml(item.productId)}` : ""} · ${escapeHtml(item.partKindLabel)}
+      </span>
+      <span class="cut-chip-length">${item.reinforcementSizeMm}</span>
+    </span>
+  `;
+
+  const reinforcementAutomaticGroupHtml = (result) => `
+    <section class="opt-result reinforcement-group">
+      <div class="opt-result-title reinforcement-result-title">
+        <span>${escapeHtml(result.reinforcementArticle)}</span>
+        <span class="opt-mode-label">${result.mode === "double" ? "Двойной" : "Одинарный"}</span>
+      </div>
+      ${formatReinforcementOptimizationStats(result.stats)}
+      <div class="opt-result-sub">Длина хлыста: ${result.stockLengthMm} мм, пропил: ${result.kerfMm} мм</div>
+      <div class="opt-result-count">Хлыстов: ${result.physicalBins.length}</div>
+      ${result.physicalBins.map((bin) => `
+        <div class="opt-bin reinforcement-opt-bin">
+          <strong>Хлыст ${bin.binNo}:</strong>
+          ${bin.items.map(reinforcementChip).join("")}
+          <span class="opt-left">Остаток: ${bin.leftoverMm} мм</span>
+          <span class="opt-left opt-left-percent percent-useful">(${((bin.leftoverMm / result.stockLengthMm) * 100).toFixed(1)}%)</span>
+        </div>
+      `).join("") || `<div class="opt-result-sub">Нет автоматических парных позиций.</div>`}
+    </section>
+  `;
+  const reinforcementManualGroupHtml = (result) => `
+    <div class="opt-result reinforcement-manual-group">
+      <div class="opt-result-title">${escapeHtml(result.reinforcementArticle)} <span class="opt-mode-label">Одинарный</span></div>
+      <div class="opt-result-sub">Длина хлыста: ${result.manualOptimization.stockLengthMm} мм, пропил: ${result.manualOptimization.kerfMm} мм</div>
+      <div class="opt-result-count">Хлыстов: ${result.manualOptimization.physicalBins.length}</div>
+      ${result.manualOptimization.physicalBins.map((bin) => `
+        <div class="opt-bin reinforcement-manual-bin">
+          <strong>Хлыст ${bin.binNo}:</strong>
+          ${bin.items.map(reinforcementChip).join("")}
+          <span class="opt-left">Остаток: ${bin.leftoverMm} мм</span>
+          <span class="opt-left opt-left-percent percent-useful">(${((bin.leftoverMm / result.manualOptimization.stockLengthMm) * 100).toFixed(1)}%)</span>
+        </div>
+      `).join("")}
+      ${result.manualOptimization.unfitItems.length
+        ? `<div class="opt-error">Не помещаются: ${result.manualOptimization.unfitItems.map((item) => item.reinforcementSizeMm).join(", ")}</div>`
+        : ""}
+    </div>
+  `;
+  const automaticHtml = reinforcementOptimizationCache.map(reinforcementAutomaticGroupHtml).join("");
+  const manualHtml = manualCount ? `
+    <section class="reinforcement-manual">
+      <div class="opt-manual-notice reinforcement-manual-title">ВНИМАНИЕ - РУЧНОЙ РАСКРОЙ АРМИРОВАНИЯ — ${manualCount} шт.</div>
+      ${reinforcementOptimizationCache.filter((result) => result.manualItems.length).map(reinforcementManualGroupHtml).join("")}
+    </section>
+  ` : "";
+  reinforcementOptimizationResults.innerHTML = automaticHtml + manualHtml;
+  const printAutomaticHtml = reinforcementOptimizationCache.map((result) => `
+    <section class="reinforcement-print-group">
+      ${reinforcementAutomaticGroupHtml(result)}
+    </section>
+  `).join("");
+  reinforcementPrintResults.innerHTML = printAutomaticHtml + manualHtml;
+  reinforcementOptimizationSettings.querySelectorAll(".reinforcement-mode").forEach((select) => {
+    select.addEventListener("change", () => {
+      const key = select.closest(".reinforcement-opt-line")?.getAttribute("data-reinforcement-key");
+      if (!key) return;
+      const scrollY = window.scrollY;
+      reinforcementModes.set(key, select.value === "double" ? "double" : "single");
+      renderReinforcementOptimization(key);
+      window.scrollTo(0, scrollY);
+      window.requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    });
+  });
+  reinforcementOptimizationSettings.querySelector(".reinforcement-global-mode")?.addEventListener("change", (event) => {
+    const scrollY = window.scrollY;
+    reinforcementOptimizationMode = event.target.value === "hard_by_product"
+      ? "hard_by_product"
+      : "max_savings";
+    renderReinforcementOptimization();
+    window.scrollTo(0, scrollY);
+    window.requestAnimationFrame(() => window.scrollTo(0, scrollY));
+  });
+}
+
+function applyFillDictionaryToPosition(position, manualKeys = new Set()) {
+  if (!position) return position;
+  position.fillings = LabelData.resolveFillingGroups(position.fillings || [], fillThicknessDictionary, manualKeys);
+  position.fillThicknesses = LabelData.uniqueFillingThicknesses(position.fillings);
+  position.unresolvedFillings = position.fillings.filter((filling) => filling.status === "unresolved");
+  return position;
+}
+
+function applyFillDictionaryToParsedPdf(parsed, manualKeys = new Set()) {
+  (parsed?.positions || []).forEach((position) => applyFillDictionaryToPosition(position, manualKeys));
+  (parsed?.pages || []).forEach((page) => applyFillDictionaryToPosition(page, manualKeys));
+  return parsed;
+}
+
+function currentUnresolvedFillingGroups(review = lastLabelReview) {
+  const groups = new Map();
+  (review?.rows || []).forEach((row) => {
+    (row.pdf?.fillings || []).filter((filling) => filling.status === "unresolved" || filling.status === "conflict").forEach((filling) => {
+      const unresolvedComponents = filling.status === "conflict"
+        ? (filling.components || []).filter((component) => component.status !== "ignored")
+        : (filling.unresolvedComponents || []);
+      const components = unresolvedComponents.length ? unresolvedComponents : [{
+        rawFormula: filling.rawFormula || `Заполнение ${filling.code}: отсутствует основная строка`,
+        normalizedFormula: `@${row.key}:${filling.code}`
+      }];
+      components.forEach((component) => {
+        const key = component.normalizedFormula || LabelData.normalizeFillingFormula(component.rawFormula);
+        if (!groups.has(key)) groups.set(key, { key, rawFormula: component.rawFormula, occurrences: [] });
+        groups.get(key).occurrences.push({ orderId: row.orderId, productId: row.productId, code: filling.code });
+      });
+    });
+  });
+  return Array.from(groups.values());
+}
+
+function updateLabelFillingsFromPositions() {
+  const byPosition = new Map();
+  pdfFilesMap.forEach((fileInfo) => {
+    (fileInfo.positions || []).forEach((position) => byPosition.set(position.key, position));
+  });
+  const updateLabel = (label) => {
+    const position = byPosition.get(label?.positionKey);
+    if (!position || !label) return;
+    label.fillings = (position.fillings || []).map((filling) => ({
+      ...filling,
+      components: (filling.components || []).map((component) => ({ ...component })),
+      sourceRows: [...(filling.sourceRows || [])],
+      unresolvedComponents: (filling.unresolvedComponents || []).map((component) => ({ ...component }))
+    }));
+    label.fillThicknesses = [...(position.fillThicknesses || [])];
+  };
+  (lastPhysicalLabels?.labels || []).forEach(updateLabel);
+  (lastLabelQueues?.auto || []).forEach((profile) => (profile.bars || []).forEach((bar) => (bar.cycles || []).forEach((cycle) => (cycle.labels || []).forEach(updateLabel))));
+  (lastLabelQueues?.manual || []).forEach((item) => updateLabel(item.label));
+}
+
+function refreshFillThicknessData(manualKeys = new Set()) {
+  pdfFilesMap.forEach((fileInfo) => applyFillDictionaryToParsedPdf(fileInfo, manualKeys));
+  renderLabelKitCheck();
+  updateLabelFillingsFromPositions();
+  renderLabelsPreview();
+}
+
+function parsePositiveThicknessInput(value) {
+  const parsed = Number(String(value || "").trim().replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function saveFillDictionaryEntry(normalizedFormula, rawFormula, thicknessMm) {
+  fillThicknessDictionary[normalizedFormula] = {
+    displayFormula: normalizeLabelText(rawFormula) || normalizedFormula,
+    thicknessMm,
+    updatedAt: new Date().toISOString()
+  };
+  return LabelData.writeFillThicknessDictionary(getAppLocalStorage(), fillThicknessDictionary);
+}
+
+function renderFillThicknessTools(review) {
+  const unresolvedGroups = currentUnresolvedFillingGroups(review);
+  if (fillThicknessResolution) {
+    fillThicknessResolution.innerHTML = unresolvedGroups.map((group) => {
+      const first = group.occurrences[0] || {};
+      const occurrences = group.occurrences.map((item) => `${item.orderId}/${item.productId} ${item.code}`).join(", ");
+      return `
+        <section class="fill-resolution-card">
+          <div class="fill-resolution-title">Не удалось определить толщину заполнения</div>
+          <div>Заказ: <strong>${escapeHtml(first.orderId)}</strong></div>
+          <div>Изделие: <strong>${escapeHtml(first.productId)}</strong></div>
+          <div>Заполнение: <strong>${escapeHtml(first.code)}</strong></div>
+          <div>Формула: <strong>«${escapeHtml(group.rawFormula)}»</strong></div>
+          ${group.occurrences.length > 1 ? `<div class="fill-resolution-occurrences">Все вхождения: ${escapeHtml(occurrences)}</div>` : ""}
+          <div class="fill-resolution-input-row">
+            <label>Толщина: <input type="text" inputmode="decimal" data-fill-input="${escapeHtml(group.key)}" /> мм</label>
+            <button type="button" data-fill-save="${escapeHtml(group.key)}" data-fill-raw="${escapeHtml(group.rawFormula)}">Сохранить и применить</button>
+          </div>
+        </section>
+      `;
+    }).join("");
+  }
+
+  const dictionaryEntries = Object.entries(fillThicknessDictionary)
+    .filter(([, entry]) => parsePositiveThicknessInput(entry?.thicknessMm ?? entry) !== null)
+    .sort(([left], [right]) => left.localeCompare(right, "ru", { numeric: true }));
+  if (fillThicknessDictionaryEl) {
+    fillThicknessDictionaryEl.innerHTML = dictionaryEntries.length ? `
+      <table class="fill-dictionary-table">
+        <thead><tr><th>Формула</th><th>Нормализованный ключ</th><th>Толщина</th><th>Действия</th></tr></thead>
+        <tbody>${dictionaryEntries.map(([key, entry]) => `
+          <tr>
+            <td>${escapeHtml(entry.displayFormula || key)}</td>
+            <td><code>${escapeHtml(key)}</code></td>
+            <td>${escapeHtml(LabelData.formatFillingThickness(entry?.thicknessMm ?? entry))} мм</td>
+            <td>
+              <button type="button" data-fill-edit="${escapeHtml(key)}">Изменить</button>
+              <button type="button" data-fill-delete="${escapeHtml(key)}">Удалить</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    ` : "<small>Справочник пока пуст.</small>";
+  }
+
+  fillThicknessResolution?.querySelectorAll("[data-fill-save]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.getAttribute("data-fill-save") || "";
+      const input = Array.from(fillThicknessResolution.querySelectorAll("[data-fill-input]"))
+        .find((element) => element.getAttribute("data-fill-input") === key);
+      const thickness = parsePositiveThicknessInput(input?.value);
+      if (thickness === null) {
+        window.alert("Введите положительное число. Допустимы точка или запятая.");
+        return;
+      }
+      if (!saveFillDictionaryEntry(key, button.getAttribute("data-fill-raw") || key, thickness)) {
+        window.alert("Не удалось сохранить справочник в localStorage.");
+        return;
+      }
+      refreshFillThicknessData(new Set([key]));
+    });
+  });
+
+  fillThicknessDictionaryEl?.querySelectorAll("[data-fill-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.getAttribute("data-fill-edit") || "";
+      const current = fillThicknessDictionary[key];
+      const value = window.prompt(`Толщина для ${current?.displayFormula || key}, мм:`, LabelData.formatFillingThickness(current?.thicknessMm));
+      if (value === null) return;
+      const thickness = parsePositiveThicknessInput(value);
+      if (thickness === null) {
+        window.alert("Введите положительное число. Допустимы точка или запятая.");
+        return;
+      }
+      saveFillDictionaryEntry(key, current?.displayFormula || key, thickness);
+      refreshFillThicknessData(new Set([key]));
+    });
+  });
+
+  fillThicknessDictionaryEl?.querySelectorAll("[data-fill-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.getAttribute("data-fill-delete") || "";
+      if (!window.confirm(`Удалить значение для формулы ${fillThicknessDictionary[key]?.displayFormula || key}?`)) return;
+      delete fillThicknessDictionary[key];
+      LabelData.writeFillThicknessDictionary(getAppLocalStorage(), fillThicknessDictionary);
+      refreshFillThicknessData();
+    });
+  });
+}
+
 function renderLabelKitCheck() {
   if (!labelSummary || !labelReview) return;
-  const cutFiles = Array.from(filesMap.values());
-  const pdfFiles = Array.from(pdfFilesMap.values());
+  const cutFiles = selectedCutFilesForProduction();
+  const pdfFiles = selectedPdfFilesForProduction();
   const cutCollected = LabelData.collectStoresFromCutFiles(cutFiles);
   const pdfCollected = LabelData.collectStoresFromPdfFiles(pdfFiles);
   const conflicts = [
@@ -1217,6 +1972,8 @@ function renderLabelKitCheck() {
   );
   lastLabelReview = review;
   lastPhysicalLabels = LabelData.buildPhysicalLabelsForReviewRows(review.rows);
+  renderFillThicknessTools(review);
+  renderReinforcementOptimization();
   renderMuratPositions();
   renderLabelsPreview();
 
@@ -1487,6 +2244,7 @@ async function addPdfFiles(files) {
     let parsed;
     try {
       parsed = await LabelPdf.parseSuperOknaPdfArrayBuffer(buffer, file.name);
+      applyFillDictionaryToParsedPdf(parsed);
     } catch (error) {
       labelConflictEvents.push({
         key: file.name,
@@ -1545,18 +2303,62 @@ dropZone.addEventListener("dragleave", () => {
 dropZone.addEventListener("drop", async (e) => {
   e.preventDefault();
   dropZone.classList.remove("is-dragover");
-  const files = Array.from(e.dataTransfer.files || []).filter((f) =>
-    f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".txt") || f.name.toLowerCase().endsWith(".pdf")
-  );
-  if (!files.length) return;
-  const cutFiles = files.filter((f) => f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".txt"));
-  const pdfFiles = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
-  if (cutFiles.length) await addFiles(cutFiles);
-  if (pdfFiles.length) await addPdfFiles(pdfFiles);
+  dropZone.textContent = "Обработка папки...";
+  const warnings = [];
+  try {
+    const collected = await window.DropFileCollector.collectSupportedFiles(e.dataTransfer);
+    warnings.push(...collected.warnings);
+    if (!collected.files.length) {
+      const diagnostics = collected.diagnostics || {};
+      const entryNames = (diagnostics.entries || []).map((entry) =>
+        `${entry.name || "?"} [file=${entry.isFile}, dir=${entry.isDirectory}]`
+      );
+      const directoryReads = (diagnostics.directories || []).map((entry) =>
+        `${entry.name || "?"}: ${entry.entryCount || 0} (${(entry.batchSizes || []).join("+")})`
+      );
+      const handleNames = (diagnostics.handles || []).map((handle) => `${handle.name || "?"} [${handle.kind || "?"}]`);
+      window.alert([
+        "В перетаскиваемых файлах и папках не найдено поддерживаемых файлов CSV, TXT или PDF.",
+        "",
+        `Диагностика: DataTransferItem — ${diagnostics.itemCount || 0}.`,
+        `Entry: ${entryNames.join(", ") || "нет"}.`,
+        `Папки/readEntries: ${directoryReads.join(", ") || "нет"}.`,
+        `FileSystemHandle: ${handleNames.join(", ") || "нет"}.`,
+        `Ошибки FileSystemHandle: ${(diagnostics.handleErrors || []).join("; ") || "нет"}.`,
+        `Полученные файлы: ${(diagnostics.foundFileNames || []).join(", ") || "нет"}.`,
+        warnings.length ? `Ошибки: ${warnings.join("; ")}` : ""
+      ].filter(Boolean).join("\n"));
+      return;
+    }
+
+    const cutFiles = collected.files.filter((file) => /\.(csv|txt)$/i.test(file.name));
+    const pdfFiles = collected.files.filter((file) => /\.pdf$/i.test(file.name));
+    for (const file of cutFiles) {
+      try {
+        await addFiles([file]);
+      } catch (error) {
+        warnings.push(`Не удалось импортировать «${file.name}»: ${error?.message || error}`);
+      }
+    }
+    for (const file of pdfFiles) {
+      try {
+        await addPdfFiles([file]);
+      } catch (error) {
+        warnings.push(`Не удалось импортировать «${file.name}»: ${error?.message || error}`);
+      }
+    }
+    if (warnings.length) {
+      window.alert(`Часть файлов не удалось обработать:\n${warnings.join("\n")}`);
+    }
+  } finally {
+    dropZone.innerHTML = dropZoneIdleHtml;
+  }
 });
 
 clearBtn.addEventListener("click", () => {
   allParts = [];
+  selectedProductionGroups.clear();
+  collapsedImportGroups.clear();
   deletedParts = [];
   filesMap.clear();
   pdfFilesMap.clear();
@@ -1821,6 +2623,27 @@ const panels = {
   murat: document.getElementById("tab-murat")
 };
 
+function setActiveOptimizationView(view) {
+  activeOptimizationView = view === "reinforcement" ? "reinforcement" : "profiles";
+  optimizationViewTabs.forEach((button) => {
+    const isActive = button.getAttribute("data-optimization-view") === activeOptimizationView;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  optimizationViewPanels.forEach((panel) => {
+    const isActive = panel.getAttribute("data-optimization-panel") === activeOptimizationView;
+    panel.classList.toggle("active", isActive);
+  });
+}
+
+optimizationViewTabs.forEach((button) => {
+  button.addEventListener("click", () => {
+    setActiveOptimizationView(button.getAttribute("data-optimization-view"));
+  });
+});
+
+setActiveOptimizationView(activeOptimizationView);
+
 tabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     tabButtons.forEach((b) => b.classList.remove("active"));
@@ -1905,28 +2728,31 @@ function expandPartsToPieces(parts, groupTitle = "") {
   const warnings = [];
 
   for (const p of parts) {
+    const requiresPairedSides = !isMullionPart(p);
     const len = Number(p.lengthMm);
     const qtyRaw = Number(p.quantity) || 0;
     const qty = Math.floor(qtyRaw);
-    const kind = normalizeOrientKind(p.orient);
+    const kind = requiresPairedSides ? normalizeOrientKind(p.orient) : "";
     const designations = sideDesignationsForKind(kind);
-    const fallbackDesignation = fallbackDesignationForKind(kind, p.orient);
+    const fallbackDesignation = requiresPairedSides
+      ? fallbackDesignationForKind(kind, p.orient)
+      : "ИМПОСТ";
     const sourceId = String(p.id || `${p.orderId}_${p.productId}_${p.profileCode}_${p.lengthMm}_${p.orient}`);
 
     if (!Number.isFinite(len) || len <= 0) continue;
     if (!Number.isFinite(qty) || qty <= 0) continue;
 
-    if (!kind) {
+    if (requiresPairedSides && !kind) {
       warnings.push(makeLabelWarning(p, groupTitle, "непонятный ориентир, сторона для наклейки не назначена точно."));
     }
-    if (!Number.isInteger(qtyRaw)) {
+    if (requiresPairedSides && !Number.isInteger(qtyRaw)) {
       warnings.push(makeLabelWarning(p, groupTitle, "количество не целое, сторона для наклейки не назначена точно."));
     }
-    if (kind && Number.isInteger(qtyRaw) && qty % 2 === 1) {
+    if (requiresPairedSides && kind && Number.isInteger(qtyRaw) && qty % 2 === 1) {
       warnings.push(makeLabelWarning(p, groupTitle, "нечетное количество в строке, последняя деталь оставлена без точной стороны."));
     }
 
-    const canAssignPairs = kind && Number.isInteger(qtyRaw);
+    const canAssignPairs = requiresPairedSides && kind && Number.isInteger(qtyRaw);
     const pairTotal = Math.ceil(qty / 2);
 
     for (let index = 0; index < qty; index++) {
@@ -1949,7 +2775,8 @@ function expandPartsToPieces(parts, groupTitle = "") {
         : "";
       const piece = createPhysicalPiece(p, groupTitle, pairNo, pairTotal, designation, pairKey, pairSlot);
       piece.sourceUnitNo = sourceUnitNo;
-      if (!pairKey) piece.doublePairBlocked = true;
+      piece.optimizationInputIndex = pieces.length;
+      if (requiresPairedSides && !pairKey) piece.doublePairBlocked = true;
       pieces.push(piece);
     }
   }
@@ -2002,22 +2829,27 @@ function buildOptimizeData(parts) {
   const normalParts = sorted.filter((p) => !isSkewPart(p));
   const skewParts = sorted.filter((p) => isSkewPart(p));
   const labelWarnings = [];
-  const groups = groupByNomenclature(normalParts).map((g) => {
+  const groups = groupByOptimizationProfile(normalParts).map((g) => {
     const expanded = expandPartsToPieces(g.items, g.name);
     labelWarnings.push(...expanded.warnings);
     return {
       title: g.name,
-      profileCode: g.items[0]?.profileCode || "",
+      profileId: g.profileId,
+      profileCode: g.profileCode,
+      partKind: g.partKind,
       pieces: expanded.pieces,
       total: expanded.pieces.length,
-      mode: DEFAULT_MODE
+      mode: g.partKind === "mullion" ? "single" : DEFAULT_MODE
     };
   });
-  const skewGroups = groupByNomenclature(skewParts).map((g) => {
+  const skewGroups = groupByOptimizationProfile(skewParts).map((g) => {
     const expanded = expandPartsToPieces(g.items, g.name);
     labelWarnings.push(...expanded.warnings);
     return {
       title: g.name,
+      profileId: g.profileId,
+      profileCode: g.profileCode,
+      partKind: g.partKind,
       pieces: expanded.pieces,
       total: expanded.pieces.length
     };
@@ -2064,17 +2896,22 @@ function renderOptimize(parts) {
   const lines = optimizeCache.groups.map((g, index) => {
     const selectedDouble = g.mode === "double" ? "selected" : "";
     const selectedSingle = g.mode === "single" ? "selected" : "";
-    const leftovers = g.mode === "double" ? buildDoublePairs(g.pieces).leftovers.length : 0;
+    const leftovers = g.mode === "double"
+      ? buildDoublePairs(g.pieces).leftovers.length
+      : 0;
     const shown = Math.max(0, g.total - leftovers);
+    const modeControl = `
+      <select class="opt-mode">
+        <option value="single" ${selectedSingle}>Одинарный</option>
+        <option value="double" ${selectedDouble}>Двойной</option>
+      </select>
+    `;
     return `
       <div class="opt-line" data-index="${index}">
         <div class="opt-line-title">${g.title}</div>
         <div class="opt-line-count">${shown} шт.</div>
         <div class="opt-line-controls">
-          <select class="opt-mode">
-            <option value="double" ${selectedDouble}>Двойной</option>
-            <option value="single" ${selectedSingle}>Одинарный</option>
-          </select>
+          ${modeControl}
         </div>
       </div>
     `;
@@ -2102,18 +2939,15 @@ function renderOptimize(parts) {
   };
 
   const { total: totalSkew, listHtml: skewList } = buildSkewSummary();
-  let skewLine = "";
-  if (totalSkew) {
-    skewLine = `
-      <div class="opt-line opt-line-skew">
+  const skewLine = `
+      <div class="opt-line opt-line-skew" id="manualModeSummary" ${totalSkew ? "" : "hidden"}>
         <div class="opt-line-title">Ручной режим</div>
         <div class="opt-line-count"><span id="skewCount">${totalSkew}</span> шт.</div>
       </div>
-      <div class="opt-skew-list" id="skewList">
+      <div class="opt-skew-list" id="skewList" ${totalSkew ? "" : "hidden"}>
         ${skewList}
       </div>
     `;
-  }
   const deletedCount = deletedParts.reduce((s, p) => s + (Number(p.quantity) || 1), 0);
   const deletedLine = deletedCount
     ? `
@@ -2130,6 +2964,13 @@ function renderOptimize(parts) {
       <div id="profileRemnantsEditor"></div>
     </div>
     <div class="opt-settings">
+      <label>Режим оптимизации
+        <select class="pvc-optimization-mode">
+          <option value="max_savings" ${pvcOptimizationMode === APP_PVC_OPTIMIZATION_MODE.MAX_SAVINGS ? "selected" : ""}>Максимальная экономия</option>
+          <option value="soft_by_product" ${pvcOptimizationMode === APP_PVC_OPTIMIZATION_MODE.SOFT_BY_PRODUCT ? "selected" : ""}>Мягкий по изделиям</option>
+          <option value="hard_by_product" ${pvcOptimizationMode === APP_PVC_OPTIMIZATION_MODE.HARD_BY_PRODUCT ? "selected" : ""}>Жёсткий по изделиям</option>
+        </select>
+      </label>
       <label>Длина хлыста, мм
         <input class="opt-stock" type="number" value="${DEFAULT_STOCK}" disabled />
       </label>
@@ -2152,12 +2993,17 @@ function renderOptimize(parts) {
       const idx = Number(line?.getAttribute("data-index"));
       if (!Number.isFinite(idx) || !optimizeCache.groups[idx]) return;
       optimizeCache.groups[idx].mode = select.value === "single" ? "single" : "double";
+      const manualModeSummaryEl = document.getElementById("manualModeSummary");
       const skewCountEl = document.getElementById("skewCount");
       const skewListEl = document.getElementById("skewList");
-      if (skewCountEl || skewListEl) {
+      if (manualModeSummaryEl || skewCountEl || skewListEl) {
         const summary = buildSkewSummary();
+        if (manualModeSummaryEl) manualModeSummaryEl.hidden = summary.total === 0;
         if (skewCountEl) skewCountEl.textContent = String(summary.total);
-        if (skewListEl) skewListEl.innerHTML = summary.listHtml;
+        if (skewListEl) {
+          skewListEl.hidden = summary.total === 0;
+          skewListEl.innerHTML = summary.listHtml;
+        }
       }
       const total = optimizeCache.groups[idx].total;
       const leftover = optimizeCache.groups[idx].mode === "double"
@@ -2171,6 +3017,21 @@ function renderOptimize(parts) {
         renderExport();
       });
     });
+
+  const pvcModeSelect = optBlocks.querySelector(".pvc-optimization-mode");
+  pvcModeSelect?.addEventListener("change", () => {
+    if (pvcModeSelect.value === APP_PVC_OPTIMIZATION_MODE.HARD_BY_PRODUCT) {
+      pvcOptimizationMode = APP_PVC_OPTIMIZATION_MODE.HARD_BY_PRODUCT;
+    } else if (pvcModeSelect.value === APP_PVC_OPTIMIZATION_MODE.SOFT_BY_PRODUCT) {
+      pvcOptimizationMode = APP_PVC_OPTIMIZATION_MODE.SOFT_BY_PRODUCT;
+    } else {
+      pvcOptimizationMode = APP_PVC_OPTIMIZATION_MODE.MAX_SAVINGS;
+    }
+    exportReady = false;
+    lastLabelQueues = null;
+    renderExport();
+    optimizeBtn?.click();
+  });
 
   renderExport();
   renderLabelWarnings(optBlocks);
@@ -2344,12 +3205,39 @@ function formatOptimizeResult(result, stock, kerf, rules = null, labels = {}) {
   return lines.join("");
 }
 
-function appendOptimizeResult(title, result, stock, kerf, modeLabel = "", rules = null) {
+function formatOptimizationMeters(valueMm) {
+  return (Number(valueMm || 0) / 1000).toLocaleString("ru-RU", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatProfileOptimizationStats(stats) {
+  if (!stats) return "";
+  const percent = Number(stats.usedPercent || 0).toLocaleString("ru-RU", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  });
+  return `
+    <div class="opt-material-stats">
+      ${stats.physicalStockCount} хлыстов
+      <span>·</span> ${formatOptimizationMeters(stats.totalMaterialMm)} м материала
+      <span>·</span> ${formatOptimizationMeters(stats.partsLengthMm)} м деталей
+      <span>·</span> ${formatOptimizationMeters(stats.kerfMm)} м пропил
+      <span>·</span> ${formatOptimizationMeters(stats.usefulLeftoverMm)} м полезный остаток
+      <span>·</span> ${formatOptimizationMeters(stats.wasteMm)} м отход
+      <span>·</span> ${percent}% использование
+    </div>
+  `;
+}
+
+function appendOptimizeResult(title, result, stock, kerf, modeLabel = "", rules = null, stats = null) {
   const modeHtml = modeLabel ? ` <span class="opt-mode-label">${modeLabel}</span>` : "";
   const section = document.createElement("div");
   section.className = "opt-result";
   section.innerHTML = `
     <div class="opt-result-title">${title}${modeHtml}</div>
+    ${formatProfileOptimizationStats(stats)}
     ${formatOptimizeResult(result, stock, kerf, rules)}
   `;
   optResults.appendChild(section);
@@ -2432,6 +3320,14 @@ function appendManualRemnantResults(remnantBins, unusedRemnants) {
 
 function doublePairKey(piece) {
   if (piece.doublePairBlocked) return "";
+  if (isMullionPart(piece)) {
+    return [
+      "mullion",
+      String(piece.profileCode || "").trim(),
+      Number(piece.lengthMm || 0),
+      normalizeAngles(piece.angles || "")
+    ].join("||");
+  }
   if (piece.labelPairKey) return `exact||${piece.labelPairKey}`;
   return [
     "fallback",
@@ -2530,7 +3426,8 @@ function buildExportGroups() {
             labelDesignation: meta.labelDesignation || "",
             label: meta.label || null,
             instanceNo: meta.instanceNo || "",
-            instanceTotal: meta.instanceTotal || ""
+            instanceTotal: meta.instanceTotal || "",
+            physicalQuantity: metaArr.filter(Boolean).length
           });
         });
       });
@@ -2549,16 +3446,18 @@ function buildExportGroups() {
           labelDesignation: piece.labelDesignation || "",
           label: piece.label || null,
           instanceNo: piece.instanceNo || "",
-          instanceTotal: piece.instanceTotal || ""
+          instanceTotal: piece.instanceTotal || "",
+          physicalQuantity: 1
         });
       });
     }
     if (!items.length) return;
 
-    const profileBase = extractProfileBase(group.profileCode);
+    const catalogProfile = resolveAppCatalogProfile(group.profileId, group.profileCode, group.title);
+    const profileBase = catalogProfile?.articleBase || extractProfileBase(group.profileCode);
     const hasCalculatedResult = optimizeCache.lastExportResults?.has(group.title);
     const totalQty = hasCalculatedResult
-      ? items.length * (mode === "double" ? 2 : 1)
+      ? items.reduce((sum, item) => sum + (Number(item.physicalQuantity) || 1), 0)
       : selectedPieces.length;
 
     groups.push({
@@ -2801,6 +3700,20 @@ function splitPairedBins(result) {
   return { bins, unfit };
 }
 
+function applyPvcOptimizationMode(result, group, rules = null) {
+  const cutMode = group?.mode === "double" ? "double" : "single";
+  if (typeof window.applyPvcOptimizationLayoutMode !== "function") {
+    return { result, diagnostics: null };
+  }
+  return window.applyPvcOptimizationLayoutMode(
+    result,
+    DEFAULT_STOCK,
+    cutMode,
+    pvcOptimizationMode,
+    { maxMaterialDegradation: 0.03, rules }
+  );
+}
+
 optimizeBtn.addEventListener("click", () => {
   optResults.innerHTML = "";
 
@@ -2850,6 +3763,8 @@ optimizeBtn.addEventListener("click", () => {
 
   optimizeCache.lastResults = new Map();
   optimizeCache.lastExportResults = new Map();
+  optimizeCache.groupingDiagnostics = new Map();
+  optimizeCache.profileOptimizationStats = new Map();
   let remainingPhysicalRemnants = expandPhysicalProfileRemnants();
   const remnantBins = [];
   const remnantManualPieces = [];
@@ -2970,10 +3885,23 @@ optimizeBtn.addEventListener("click", () => {
         }
       }
 
+      const groupedLayout = applyPvcOptimizationMode(automaticBaseResult, group, optimizeRules);
+      automaticBaseResult = groupedLayout.result;
+      optimizeCache.groupingDiagnostics.set(group.title, groupedLayout.diagnostics);
+      const stats = typeof window.calculateProfileOptimizationStats === "function"
+        ? window.calculateProfileOptimizationStats(
+            automaticBaseResult,
+            DEFAULT_STOCK,
+            DEFAULT_KERF,
+            optimizeRules,
+            "double"
+          )
+        : null;
+      optimizeCache.profileOptimizationStats.set(group.title, stats);
       const result = splitPairedBins(automaticBaseResult);
       optimizeCache.lastResults.set(group.title, result);
       optimizeCache.lastExportResults.set(group.title, automaticBaseResult);
-      appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
+      appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules, stats);
       return;
     }
 
@@ -3004,9 +3932,22 @@ optimizeBtn.addEventListener("click", () => {
     } else {
       result = window.optimizeCut(singleItems, DEFAULT_STOCK, DEFAULT_KERF, optimizeRules);
     }
+    const groupedLayout = applyPvcOptimizationMode(result, group, optimizeRules);
+    result = groupedLayout.result;
+    optimizeCache.groupingDiagnostics.set(group.title, groupedLayout.diagnostics);
+    const stats = typeof window.calculateProfileOptimizationStats === "function"
+      ? window.calculateProfileOptimizationStats(
+          result,
+          DEFAULT_STOCK,
+          DEFAULT_KERF,
+          optimizeRules,
+          "single"
+        )
+      : null;
+    optimizeCache.profileOptimizationStats.set(group.title, stats);
     optimizeCache.lastResults.set(group.title, result);
     optimizeCache.lastExportResults.set(group.title, result);
-    appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules);
+    appendOptimizeResult(group.title, result, DEFAULT_STOCK, DEFAULT_KERF, modeLabel, optimizeRules, stats);
   });
 
   if (autoNotice && (remnantManualPieces.length || additionalPairLeftoverCount)) {
@@ -3068,17 +4009,45 @@ renderTable([]);
 renderPdfFileList();
 renderLabelKitCheck();
 
-if (cutDateInput) {
+function setSharedCutDateValue(value) {
+  sharedCutDateValue = String(value || "");
+  if (cutDateInput && cutDateInput.value !== sharedCutDateValue) {
+    cutDateInput.value = sharedCutDateValue;
+  }
+  if (reinforcementCutDateInput && reinforcementCutDateInput.value !== sharedCutDateValue) {
+    reinforcementCutDateInput.value = sharedCutDateValue;
+  }
+  if (reinforcementPrintDate) {
+    reinforcementPrintDate.value = sharedCutDateValue;
+  }
+}
+
+[cutDateInput, reinforcementCutDateInput].filter(Boolean).forEach((dateInput) => {
+  dateInput.addEventListener("input", () => setSharedCutDateValue(dateInput.value));
+  dateInput.addEventListener("change", () => setSharedCutDateValue(dateInput.value));
+});
+
+if (cutDateInput || reinforcementCutDateInput) {
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
-  cutDateInput.value = `${yyyy}-${mm}-${dd}`;
+  setSharedCutDateValue(`${yyyy}-${mm}-${dd}`);
 }
 
 if (printBtn) {
   printBtn.addEventListener("click", () => {
     window.print();
+  });
+}
+
+if (printReinforcementBtn) {
+  printReinforcementBtn.addEventListener("click", () => {
+    document.body.classList.add("print-reinforcement");
+    window.print();
+    setTimeout(() => {
+      document.body.classList.remove("print-reinforcement");
+    }, 100);
   });
 }
 
@@ -3122,7 +4091,7 @@ if (saveBtn) {
     .opt-left-percent { font-weight: 700; }
     .percent-scrap { color: #1d4ed8; }
     .percent-useful { color: #15803d; }
-    .cut-chip { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px; margin-right: 6px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; font-weight: 400; text-align: center; min-width: 72px; }
+    .cut-chip { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; width: 140px; min-width: 140px; box-sizing: border-box; padding: 4px 6px; margin-right: 6px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; font-weight: 400; text-align: center; }
     .cut-chip--skew { background: #111; border-color: #111; color: #fff; }
     .cut-chip-length { display: block; font-size: 16px; font-weight: 600; color: #64748b; }
     .cut-chip-meta { display: block; margin-bottom: 2px; padding-bottom: 2px; border-bottom: 1px solid #cbd5e1; font-weight: 600; font-size: 13px; color: #111827; white-space: nowrap; }
