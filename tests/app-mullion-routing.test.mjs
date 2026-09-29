@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
 const profilesSource = await readFile(new URL("../profiles.js", import.meta.url), "utf8");
+const productionOrderSource = await readFile(new URL("../production-order.js", import.meta.url), "utf8");
 const optimizerSource = await readFile(new URL("../optimizer.js", import.meta.url), "utf8");
 
 function functionSource(name, nextName) {
@@ -52,12 +53,12 @@ const sources = [
 const context = vm.createContext({
   console,
   DEFAULT_MODE: "double",
-  PART_KIND_ORDER: Object.freeze({ sash: 1, frame: 2, mullion: 3 }),
   optimizeCache: { groups: [], skewGroups: [] },
   profileRemnants: []
 });
 context.window = context;
 vm.runInContext(profilesSource, context, { filename: "profiles.js" });
+vm.runInContext(productionOrderSource, context, { filename: "production-order.js" });
 vm.runInContext(`
   const PROFILE_BAD_LEFTOVER_RULES = {
     S35801: { scrapMax: 70, minUsefulLeftover: 650 },
@@ -129,11 +130,11 @@ const profileOrderPermutations = [
 for (const inputParts of profileOrderPermutations) {
   assert.deepEqual(
     Array.from(context.groupByNomenclature(inputParts), (group) => group.partKind),
-    ["sash", "frame", "mullion"]
+    ["frame", "sash", "mullion"]
   );
   assert.deepEqual(
     Array.from(context.buildOptimizeData(inputParts).groups, (group) => group.partKind),
-    ["sash", "frame", "mullion"]
+    ["frame", "sash", "mullion"]
   );
 }
 const legacyPart = {
@@ -146,9 +147,22 @@ const legacyPart = {
 };
 assert.deepEqual(
   Array.from(context.groupByNomenclature([legacyPart, mullion, frame, sash]), (group) => group.partKind),
-  ["sash", "frame", "mullion", ""]
+  ["frame", "sash", "mullion", ""]
 );
-console.log("OK единый порядок групп всегда sash → frame → mullion → legacy независимо от входных строк");
+console.log("OK единый production-порядок групп всегда frame → sash → mullion → legacy независимо от входных строк");
+
+const optimizationDisplayGroups = context.ProductionOrder.sortProductionProfileGroups(
+  context.groupByNomenclature([legacyPart, mullion, frame, sash])
+);
+assert.deepEqual(
+  Array.from(optimizationDisplayGroups, (group) => group.partKind),
+  ["frame", "sash", "mullion", ""]
+);
+assert.deepEqual(
+  Array.from(context.groupByNomenclature([legacyPart, mullion, frame, sash]), (group) => group.partKind),
+  ["frame", "sash", "mullion", ""]
+);
+console.log("OK импорт, настройки и результат используют общий frame → sash → mullion → legacy");
 
 const frameRepresentations = [
   { ...frame, id: "frame-base", profileId: "", profileCode: "XS358.01", name: "legacy text" },

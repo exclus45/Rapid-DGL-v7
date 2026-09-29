@@ -188,7 +188,6 @@ const APP_PVC_OPTIMIZATION_MODE = Object.freeze({
   HARD_BY_PRODUCT: "hard_by_product"
 });
 const DEFAULT_PVC_OPTIMIZATION_MODE = APP_PVC_OPTIMIZATION_MODE.MAX_SAVINGS;
-const PART_KIND_ORDER = Object.freeze({ sash: 1, frame: 2, mullion: 3 });
 const SHOW_LABEL_BARCODE = false;
 const PROFILE_BAD_LEFTOVER_RULES = {
   S35801: { scrapMax: DEFAULT_SCRAP_MAX, minUsefulLeftover: 650 },
@@ -689,14 +688,7 @@ function groupByNomenclature(parts) {
     }
     groups.get(key).items.push(p);
   }
-  return Array.from(groups.values()).sort((a, b) => {
-    const partKindA = String(a.partKind || "").trim().toLowerCase();
-    const partKindB = String(b.partKind || "").trim().toLowerCase();
-    const kindOrderA = PART_KIND_ORDER[partKindA] || Number.MAX_SAFE_INTEGER;
-    const kindOrderB = PART_KIND_ORDER[partKindB] || Number.MAX_SAFE_INTEGER;
-    if (kindOrderA !== kindOrderB) return kindOrderA - kindOrderB;
-    return String(a.name).localeCompare(String(b.name), "ru", { sensitivity: "base" });
-  });
+  return window.ProductionOrder.sortProductionProfileGroups(Array.from(groups.values()));
 }
 
 function groupByOptimizationProfile(parts) {
@@ -727,12 +719,7 @@ function groupByOptimizationProfile(parts) {
     }
     groups.get(key).items.push(p);
   }
-  return Array.from(groups.values()).sort((a, b) => {
-    const kindOrderA = PART_KIND_ORDER[String(a.partKind || "").trim().toLowerCase()] || Number.MAX_SAFE_INTEGER;
-    const kindOrderB = PART_KIND_ORDER[String(b.partKind || "").trim().toLowerCase()] || Number.MAX_SAFE_INTEGER;
-    if (kindOrderA !== kindOrderB) return kindOrderA - kindOrderB;
-    return String(a.name).localeCompare(String(b.name), "ru", { sensitivity: "base" });
-  });
+  return window.ProductionOrder.sortProductionProfileGroups(Array.from(groups.values()));
 }
 
 function normalizeAngles(value) {
@@ -3419,7 +3406,7 @@ function buildExportGroups() {
   if (!optimizeCache.groups.length) return [];
   const groups = [];
 
-  optimizeCache.groups.forEach((group) => {
+  window.ProductionOrder.sortProductionProfileGroups(optimizeCache.groups).forEach((group) => {
     const mode = group.mode;
     let selectedPieces = [];
     if (group.mode === "double") {
@@ -3492,6 +3479,7 @@ function buildExportGroups() {
 
     groups.push({
       title: group.title,
+      partKind: group.partKind,
       profileBase,
       totalQty,
       items,

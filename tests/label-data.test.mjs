@@ -3,6 +3,7 @@ import vm from "node:vm";
 
 globalThis.window = globalThis;
 vm.runInThisContext(fs.readFileSync("profiles.js", "utf8"), { filename: "profiles.js" });
+vm.runInThisContext(fs.readFileSync("production-order.js", "utf8"), { filename: "production-order.js" });
 vm.runInThisContext(fs.readFileSync("label-data.js", "utf8"), { filename: "label-data.js" });
 
 const { LabelData } = globalThis;
@@ -432,16 +433,16 @@ const queue = LabelData.buildLabelQueuesFromOptimizeState({
   lastExportResults: qResults,
   manualGroups: qManual
 });
-assert("single cycle has one label", queue.auto[1].bars[0].cycles[0].labelIds.length === 1);
-assert("double cycle has two different labels", queue.auto[0].bars[0].cycles[0].labelIds.length === 2 && new Set(queue.auto[0].bars[0].cycles[0].labelIds).size === 2);
-assert("queue order follows sash then frame", queue.auto[0].bars[0].cycles[0].labelIds.join(",") === "l2,l3" && queue.auto[1].bars[0].cycles[0].labelIds[0] === "l1");
+assert("single cycle has one label", queue.auto[0].bars[0].cycles[0].labelIds.length === 1);
+assert("double cycle has two different labels", queue.auto[1].bars[0].cycles[0].labelIds.length === 2 && new Set(queue.auto[1].bars[0].cycles[0].labelIds).size === 2);
+assert("queue order follows frame then sash", queue.auto[0].bars[0].cycles[0].labelIds[0] === "l1" && queue.auto[1].bars[0].cycles[0].labelIds.join(",") === "l2,l3");
 assert("manual details are only in manual queue", queue.manual.length === 1 && queue.manual[0].labelId === "l4");
 assert("each labelId is used exactly once", queue.validation.ready === true && queue.validation.duplicateLabelIds.length === 0 && queue.validation.lostLabelIds.length === 0);
 
 const queuePrintSequence = LabelData.buildJobPrintSequence(queue);
-assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.slice(0, 3).map((entry) => entry.labelId).join(",") === "l2,l3,l1");
-assert("manual labels print after all automatic labels", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l2,l3,l1,l4");
-assert("automatic cycles reserve rows before the manual queue", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,1,2,4");
+assert("print sequence follows JOB labelIds without regrouping", queuePrintSequence.slice(0, 3).map((entry) => entry.labelId).join(",") === "l1,l2,l3");
+assert("manual labels print after all automatic labels", queuePrintSequence.map((entry) => entry.labelId).join(",") === "l1,l2,l3,l4");
+assert("automatic cycles reserve rows before the manual queue", queuePrintSequence.map((entry) => entry.gridCellIndex).join(",") === "0,2,3,4");
 
 const denseManualPrintSequence = LabelData.buildJobPrintSequence({
   auto: queue.auto,

@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
 const profilesSource = await readFile(new URL("../profiles.js", import.meta.url), "utf8");
+const productionOrderSource = await readFile(new URL("../production-order.js", import.meta.url), "utf8");
 
 function functionSource(name, nextName) {
   const start = appSource.indexOf(`function ${name}(`);
@@ -25,11 +26,11 @@ const context = vm.createContext({
       return details.map((detail) => detail.profile || detail.profileCode || "").sort().join("|");
     }
   },
-  isSkewPart: () => false,
-  PART_KIND_ORDER: Object.freeze({ sash: 1, frame: 2, mullion: 3 })
+  isSkewPart: () => false
 });
 context.window = context;
 vm.runInContext(profilesSource, context, { filename: "profiles.js" });
+vm.runInContext(productionOrderSource, context, { filename: "production-order.js" });
 vm.runInContext([
   functionSource("resolveAppCatalogProfile", "profileDisplayNameForCode"),
   functionSource("normalizeGroupText", "normalizeGroupKey"),

@@ -36,11 +36,7 @@ const IGNORED_FILLING_COMPONENTS = [
   "лист оцинкованный"
 ];
 
-const LABEL_PART_KIND_ORDER = {
-  sash: 1,
-  frame: 2,
-  mullion: 3
-};
+const LABEL_PART_KIND_ORDER = window.ProductionOrder.PRODUCTION_PART_KIND_ORDER;
 
 function normalizeLabelText(value) {
   return String(value || "")
@@ -1177,22 +1173,12 @@ function buildLabelQueuesFromOptimizeState(input = {}) {
   const cyclesWithoutLabels = [];
   const cyclesModeMismatch = [];
 
-  const orderedGroups = groups
-    .map((group, index) => ({ group, index }))
-    .sort((a, b) => {
-      const kindA = canonicalPartKindForDetail({
-        partKind: a.group.partKind,
-        name: a.group.title
-      });
-      const kindB = canonicalPartKindForDetail({
-        partKind: b.group.partKind,
-        name: b.group.title
-      });
-      const priorityA = LABEL_PART_KIND_ORDER[kindA] || Number.MAX_SAFE_INTEGER;
-      const priorityB = LABEL_PART_KIND_ORDER[kindB] || Number.MAX_SAFE_INTEGER;
-      return priorityA - priorityB || a.index - b.index;
+  const orderedGroups = window.ProductionOrder.sortProductionProfileGroups(groups, (group) => (
+    canonicalPartKindForDetail({
+      partKind: group.partKind,
+      name: group.title
     })
-    .map((entry) => entry.group);
+  ));
 
   orderedGroups.forEach((group) => {
     const result = lastExportResults.get(group.title);

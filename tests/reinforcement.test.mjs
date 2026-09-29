@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 globalThis.window = globalThis;
 vm.runInThisContext(fs.readFileSync("profiles.js", "utf8"), { filename: "profiles.js" });
+vm.runInThisContext(fs.readFileSync("production-order.js", "utf8"), { filename: "production-order.js" });
 vm.runInThisContext(fs.readFileSync("label-data.js", "utf8"), { filename: "label-data.js" });
 vm.runInThisContext(fs.readFileSync("reinforcement.js", "utf8"), { filename: "reinforcement.js" });
 

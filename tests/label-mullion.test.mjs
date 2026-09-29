@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 globalThis.window = globalThis;
 vm.runInThisContext(fs.readFileSync("profiles.js", "utf8"), { filename: "profiles.js" });
+vm.runInThisContext(fs.readFileSync("production-order.js", "utf8"), { filename: "production-order.js" });
 vm.runInThisContext(fs.readFileSync("label-data.js", "utf8"), { filename: "label-data.js" });
 vm.runInThisContext(fs.readFileSync("label-pdf.js", "utf8"), { filename: "label-pdf.js" });
 
@@ -158,15 +159,15 @@ const queue = LabelData.buildLabelQueuesFromOptimizeState({
   lastExportResults: results
 });
 
-assert.deepEqual(queue.auto.map((group) => group.profileCode), ["XS358.02", "XS358.01", "XS358.03"]);
+assert.deepEqual(queue.auto.map((group) => group.profileCode), ["XS358.01", "XS358.02", "XS358.03"]);
 assert.equal(queue.validation.ready, true);
 assert.equal(queue.validation.autoLabelCount, 13);
 const printKinds = LabelData.buildJobPrintSequence(queue)
   .map((entry) => LabelData.canonicalPartKindForDetail(entry.label));
 assert.deepEqual(printKinds, [
-  ...Array(8).fill("sash"),
   ...Array(4).fill("frame"),
+  ...Array(8).fill("sash"),
   "mullion"
 ]);
 
-console.log("OK mullion labels: scope, content, 3475 count and sash → frame → mullion queue");
+console.log("OK mullion labels: scope, content, 3475 count and frame → sash → mullion queue");

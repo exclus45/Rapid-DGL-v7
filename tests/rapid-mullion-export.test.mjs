@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
 const profilesSource = await readFile(new URL("../profiles.js", import.meta.url), "utf8");
+const productionOrderSource = await readFile(new URL("../production-order.js", import.meta.url), "utf8");
 const optimizerSource = await readFile(new URL("../optimizer.js", import.meta.url), "utf8");
 
 function functionSource(name, nextName) {
@@ -16,6 +17,7 @@ function functionSource(name, nextName) {
 const context = vm.createContext({ console, optimizeCache: { groups: [], lastExportResults: new Map() } });
 context.window = context;
 vm.runInContext(profilesSource, context, { filename: "profiles.js" });
+vm.runInContext(productionOrderSource, context, { filename: "production-order.js" });
 vm.runInContext(optimizerSource, context, { filename: "optimizer.js" });
 vm.runInContext([
   functionSource("resolveAppCatalogProfile", "profileDisplayNameForCode"),
@@ -167,3 +169,46 @@ assert.equal(stagedGroup.items.length, 1);
 assert.equal(stagedGroup.items[0].lengthMm, 1000);
 assert(!stagedGroup.items.some((item) => item.lengthMm === 1265));
 console.log("OK импост из ручного остатка исключён, оставшийся автоматический импост входит в JOB");
+
+const productionProfiles = [
+  context.ProfileCatalog.findProfileByArticleBase("XS358.03"),
+  context.ProfileCatalog.findProfileByArticleBase("XS358.02"),
+  context.ProfileCatalog.findProfileByArticleBase("XS358.01")
+];
+const productionKinds = ["mullion", "sash", "frame"];
+const productionGroups = productionProfiles.map((profile, index) => {
+  const first = { ...piece(profile, `${profile.profileId}-first`, 900 + index), partKind: productionKinds[index], orderId: `${7000 + index}` };
+  const second = { ...piece(profile, `${profile.profileId}-second`, 800 + index), partKind: productionKinds[index], orderId: `${8000 + index}` };
+  return {
+    group: {
+      title: profile.name,
+      profileId: profile.profileId,
+      profileCode: profile.articleBase,
+      partKind: productionKinds[index],
+      mode: "single",
+      pieces: [first, second]
+    },
+    result: {
+      bins: [{ parts: [
+        { length: second.lengthMm, meta: second },
+        { length: first.lengthMm, meta: first }
+      ] }],
+      unfit: []
+    }
+  };
+});
+context.optimizeCache = {
+  groups: productionGroups.map((entry) => entry.group),
+  lastExportResults: new Map(productionGroups.map((entry) => [entry.group.title, entry.result]))
+};
+const orderedExportGroups = context.buildExportGroups();
+assert.deepEqual(
+  Array.from(orderedExportGroups, (group) => group.partKind),
+  ["frame", "sash", "mullion"]
+);
+assert.deepEqual(
+  Array.from(orderedExportGroups[0].items, (item) => item.orderId),
+  ["8002", "7002"],
+  "порядок деталей внутри рассчитанного хлыста рамы должен сохраниться"
+);
+console.log("OK экспортные программы идут frame → sash → mullion без пересортировки деталей внутри хлыста");
