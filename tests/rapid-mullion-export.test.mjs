@@ -33,8 +33,21 @@ vm.runInContext([
   functionSource("buildExportGroups", "makeHeader"),
   functionSource("makeHeader", "dateToOrderNo"),
   functionSource("makeNLines", "makeProgramBlock"),
-  functionSource("makeProgramBlock", "buildJobTextForGroup")
+  functionSource("makeProgramBlock", "buildJobTextForGroup"),
+  functionSource("safeFileName", "renderExport")
 ].join("\n"), context, { filename: "rapid-export-functions.js" });
+
+for (const [profileId, title, expected] of [
+  ["S358.16", "Рама дверная 72 мм", "111126_S358_16.job"],
+  ["XS358.01", null, "111126_ProWin_XS358_01.job"],
+  ["XS358.02", null, "111126_ProWin_XS358_02.job"]
+]) {
+  const profile = context.ProfileCatalog.findProfileByArticleBase(profileId);
+  assert.equal(context.buildJobFileName("111126", {
+    title: title ?? profile.name,
+    profileBase: profile.articleBase
+  }), expected);
+}
 
 function piece(profile, id, lengthMm = 1265) {
   return {

@@ -3587,6 +3587,14 @@ function extractBracketName(title) {
   return match ? match[1].trim() : "";
 }
 
+function buildJobFileName(datePart, group) {
+  const bracketName = extractBracketName(group.title);
+  const baseName = bracketName
+    ? safeFileName(`${bracketName}_${group.profileBase}`)
+    : safeFileName(group.profileBase === "S358.16" ? group.profileBase : group.title);
+  return `${datePart}_${baseName}.job`;
+}
+
 function renderExport() {
   if (!exportBlocks) return;
   exportCache = buildExportGroups();
@@ -3664,11 +3672,7 @@ function renderExport() {
       const blob = new Blob([bytes], { type: "application/octet-stream" });
 
       const datePart = dateToOrderNo(cutDateInput?.value);
-      const bracketName = extractBracketName(group.title);
-      const baseName = bracketName
-        ? safeFileName(`${bracketName}_${group.profileBase}`)
-        : safeFileName(group.title);
-      const suggestedName = `${datePart}_${baseName}.job`;
+      const suggestedName = buildJobFileName(datePart, group);
       if (window.showSaveFilePicker) {
         const handle = await window.showSaveFilePicker({
           suggestedName,
